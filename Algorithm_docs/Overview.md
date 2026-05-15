@@ -60,3 +60,6 @@ ABACUS 使用自研的 FFT 分解流程与手动通信，而非直接依赖全�
 - 对实值输入使用 r2c/c2r 路径，并只保留半轴频域数据，`fftnx/fftny` 会缩减到 `nx/2+1` 或 `ny/2+1`。
 
 以上是对于module_pw模块总体的概要和理解。关于具体的Workflow对应的算法梳理，请参见文件夹内其他的文档`WorkflowA.md`、`WorkflowB.md`、`WorkflowC.md`和`GammaOnly.md`。
+
+## 对AI模型的评价
+
