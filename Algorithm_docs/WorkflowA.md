@@ -55,7 +55,7 @@ for (int ix = ix_start; ix <= ix_end; ++ix)
 
 **输出**:
 
-- `st_length2D[ixy]`: 位置 `ixy` 处 stick 的平面波数 $L[ ext{ixy}]$
+- `st_length2D[ixy]`: 位置 `ixy` 处 stick 的平面波数 $L[\text{ixy}]$
 - `st_bottom2D[ixy]`: 该 stick 的最小有效 $i_z$（底部索引）
 - 后续扫描统计全局 `nstot`（有效 stick 数）与 `npwtot`（总平面波数）
 
@@ -65,24 +65,24 @@ for (int ix = ix_start; ix <= ix_end; ++ix)
 | ---- | -------- | ---- |
 | $\mathcal{I}_x, \mathcal{I}_y, \mathcal{I}_z$ | `ix, iy, iz` | 整数倒格矢索引，范围由 `xprime`/`gamma_only` 标志决定 |
 | $\mathbf{M}$ | `this->GGT` | 度规矩阵 $3  imes 3$，$\|\mathbf{G}\|^2 = \mathbf{f} \cdot (\mathbf{M} \mathbf{f})$ |
-| $E_{ ext{cut}}$ | `this->ggecut` | 截断能量（$\|\mathbf{G}\|^2$ 上界） |
-| $N_x^{ ext{fft}}, N_y^{ ext{fft}}$ | `fftnx`, `fftny` | FFT 网格 x, y 维度 |
-| $n_{ ext{xy}}$ | `fftnxy` | $N_x^{ ext{fft}} \cdot N_y^{ ext{fft}}$ |
-| $ ext{ixy}$ | `ixy` | 线性化网格索引，$ ext{ixy} = x \cdot N_y^{ ext{fft}} + y$，其中 $x = i_x mod N_x$，$y = i_y mod N_y$ |
-| $L[ ext{ixy}]$ | `st_length2D[ixy]` | stick 长度（该 $(i_x, i_y)$ 上满足截断的 $i_z$ 个数） |
+| $E_{\text{cut}}$ | `this->ggecut` | 截断能量（$\|\mathbf{G}\|^2$ 上界） |
+| $N_x^{\text{fft}}, N_y^{\text{fft}}$ | `fftnx`, `fftny` | FFT 网格 x, y 维度 |
+| $n_{\text{xy}}$ | `fftnxy` | $N_x^{\text{fft}} \cdot N_y^{\text{fft}}$ |
+| $\text{ixy}$ | `ixy` | 线性化网格索引，$\text{ixy} = x \cdot N_y^{\text{fft}} + y$，其中 $x = i_x mod N_x$，$y = i_y mod N_y$ |
+| $L[\text{ixy}]$ | `st_length2D[ixy]` | stick 长度（该 $(i_x, i_y)$ 上满足截断的 $i_z$ 个数） |
 
 **循环边界形式化**:
 
 | 标志组 | `ix_start` | `ix_end` | `iy_start` | `iy_end` |
 | ------ | --------- | ------- | --------- | ------- |
 | 普通 | $-\lfloor N_x/2 \rfloor$ | $\lfloor N_x/2 \rfloor$ | $-\lfloor N_y/2 \rfloor$ | $\lfloor N_y/2 \rfloor$ |
-| `xprime = true` | $0$ | $N_x^{ ext{fft}} - 1$ | $-\lfloor N_y/2 \rfloor$ | $\lfloor N_y/2 \rfloor$ |
-| `xprime = false` | $-\lfloor N_x/2 \rfloor$ | $\lfloor N_x/2 \rfloor$ | $0$ | $N_y^{ ext{fft}} - 1$ |
+| `xprime = true` | $0$ | $N_x^{\text{fft}} - 1$ | $-\lfloor N_y/2 \rfloor$ | $\lfloor N_y/2 \rfloor$ |
+| `xprime = false` | $-\lfloor N_x/2 \rfloor$ | $\lfloor N_x/2 \rfloor$ | $0$ | $N_y^{\text{fft}} - 1$ |
 
 **不变式**:
 
-- $\sum_{ ext{ixy}=0}^{n_{ ext{xy}}-1} \mathbb{I}(L[ ext{ixy}] > 0) = n_{ ext{stot}}$
-- $\sum_{ ext{ixy}=0}^{n_{ ext{xy}}-1} L[ ext{ixy}] = n_{ ext{pw}}$
+- $\sum_{\text{ixy}=0}^{n_{\text{xy}}-1} \mathbb{I}(L[\text{ixy}] > 0) = n_{\text{stot}}$
+- $\sum_{\text{ixy}=0}^{n_{\text{xy}}-1} L[\text{ixy}] = n_{\text{pw}}$
 
 ### 2.3 数据依赖与竞争分析
 
@@ -152,8 +152,8 @@ for (int ix = ix_start; ix <= ix_end; ++ix)
 
 **复杂度**:
 
-- 时间: $O(N_x N_y N_z / T + n_{ ext{xy}} \cdot T)$（计算 + 归约）
-- 空间: $O(n_{ ext{xy}} \cdot T)$。典型场景 $n_{ ext{xy}} < 10^5, T \leq 64$，总私有内存 $< 25 ext{MB}$，可接受。
+- 时间: $O(N_x N_y N_z / T + n_{\text{xy}} \cdot T)$（计算 + 归约）
+- 空间: $O(n_{\text{xy}} \cdot T)$。典型场景 $n_{\text{xy}} < 10^5, T \leq 64$，总私有内存 $< 25\text{MB}$，可接受。
 
 #### 2.4.2 方案B: 原子操作
 
@@ -172,7 +172,7 @@ for (int iz = iz_start; iz <= iz_end; ++iz)
             }
 ```
 
-**代价**: 每次有效 G 点触发一次原子操作。当 $n_{ ext{pw}} \sim 10^5$ 时开销明显，仅作为内存受限时的备选。
+**代价**: 每次有效 G 点触发一次原子操作。当 $n_{\text{pw}} \sim 10^5$ 时开销明显，仅作为内存受限时的备选。
 
 ### 2.5 并行调度策略
 
@@ -180,11 +180,11 @@ for (int iz = iz_start; iz <= iz_end; ++iz)
 
 | 策略 | 通信/同步开销 | 内存开销 | 适用场景 |
 | ---- | ----------- | ------- | ------- |
-| `schedule(static)` + 私有数组 | $O(n_{ ext{xy}} \cdot T)$ 归约 | $O(n_{ ext{xy}} \cdot T)$ | **推荐**，通用场景 |
-| `schedule(static)` + 原子操作 | $O(n_{ ext{pw}})$ 原子延迟 | $O(1)$ | 内存受限、线程数少 |
+| `schedule(static)` + 私有数组 | $O(n_{\text{xy}} \cdot T)$ 归约 | $O(n_{\text{xy}} \cdot T)$ | **推荐**，通用场景 |
+| `schedule(static)` + 原子操作 | $O(n_{\text{pw}})$ 原子延迟 | $O(1)$ | 内存受限、线程数少 |
 | `schedule(dynamic, 1)` | $O(N_x \log T)$ 调度开销 | 取决于实现 | **不推荐**，本场景负载已均衡 |
 
-**归约优化**: 当 $n_{ ext{xy}}$ 较大时，可将 `st_length2D` 分段为 $T$ 个 block，各线程归约到不同 block，最后串行合并，减少临界区竞争。
+**归约优化**: 当 $n_{\text{xy}}$ 较大时，可将 `st_length2D` 分段为 $T$ 个 block，各线程归约到不同 block，最后串行合并，减少临界区竞争。
 
 ### 2.6 正确性验证要求
 
@@ -200,13 +200,13 @@ for (int iz = iz_start; iz <= iz_end; ++iz)
 设串行时间为 $T_1 = O(N_x N_y N_z)$，并行时间为：
 
 $$
-T_T = O\left(\frac{N_x N_y N_z}{T} + \frac{n_{ ext{xy}} \cdot T}{ ext{mem_bw}} + \alpha \cdot T \right)
+T_T = O\left(\frac{N_x N_y N_z}{T} + \frac{n_{\text{xy}} \cdot T}{\text{mem\_bw}} + \alpha \cdot T \right)
 $$
 
 其中 $\alpha$ 为临界区同步开销。加速比上界受限于归约阶段：
 
 $$
-S_T \leq \min\left(T, \frac{N_x N_y N_z}{n_{ ext{xy}} \cdot T} \right)
+S_T \leq \min\left(T, \frac{N_x N_y N_z}{n_{\text{xy}} \cdot T} \right)
 $$
 
 当 $N_z$ 较小（例如 $N_z < T$）时，按 `ix` 分段的并行度受限，此时可考虑 `collapse(2)` 合并 `ix` 和 `iy` 循环。
@@ -221,9 +221,9 @@ $$
 
 | 阶段 | 操作 | 访存量 | 所在位置 |
 | ---- | ---- | ------ | ------- |
-| P1 | 实空间 `in` → `auxr` 填充/转置 | $O(n_{ ext{rxx}})$ | `pw_transform.cpp:real2recip` |
-| P2 | `gatherp_scatters_pack`: planes → sticks 重排 | $O(n_{ ext{stot}} \cdot n_{ ext{plane}})$ | `pw_gatherscatter.h:gatherp_scatters` |
-| P3 | `gathers_scatterp_unpack`: sticks → planes 重排 | $O(n_{ ext{st}} \cdot N_z)$ | `pw_gatherscatter.h:gathers_scatterp` |
+| P1 | 实空间 `in` → `auxr` 填充/转置 | $O(n_{\text{rxx}})$ | `pw_transform.cpp:real2recip` |
+| P2 | `gatherp_scatters_pack`: planes → sticks 重排 | $O(n_{\text{stot}} \cdot n_{\text{plane}})$ | `pw_gatherscatter.h:gatherp_scatters` |
+| P3 | `gathers_scatterp_unpack`: sticks → planes 重排 | $O(n_{\text{st}} \cdot N_z)$ | `pw_gatherscatter.h:gathers_scatterp` |
 
 **注**: `recip2real` 为严格逆路径，P2/P3 角色互换，优化策略对称。
 
@@ -250,9 +250,9 @@ for (int ixy = 0; ixy < nxy; ++ixy)
 | 数组 | 访问模式 | 步长 | 局部性 |
 | ---- | ------- | ---- | ------ |
 | `auxr` (写) | 连续 | 1 | 极好（流式写入） |
-| `in` (读) | 跨步 | $n_{ ext{xy}}$ | 差（每次 `iz` 递增跳跃 $n_{ ext{xy}}$） |
+| `in` (读) | 跨步 | $n_{\text{xy}}$ | 差（每次 `iz` 递增跳跃 $n_{\text{xy}}$） |
 
-当 $n_{ ext{xy}}$ 很大（如 $256  imes 256 = 65536$）时，`in` 的跨步读取导致每次均可能 L1/L2 cache miss。
+当 $n_{\text{xy}}$ 很大（如 $256  imes 256 = 65536$）时，`in` 的跨步读取导致每次均可能 L1/L2 cache miss。
 
 #### 3.2.2 Tiling 优化与循环重排
 
@@ -269,7 +269,7 @@ for (int iz_block = 0; iz_block < nplane; iz_block += TILE_SIZE)
 }
 ```
 
-**原理**: `iz` 内层循环连续访问 `in[ixy + iz * nxy]` 时，由于 `iz` 递增 1，地址跳跃 $n_{ ext{xy}}  imes  ext{sizeof(complex)}$。Tiling 后，一个 tile 内处理固定范围的 `iz`，使得 `in` 的访问模式在 `ixy` 维度上局部化。
+**原理**: `iz` 内层循环连续访问 `in[ixy + iz * nxy]` 时，由于 `iz` 递增 1，地址跳跃 $n_{\text{xy}}  imes \text{sizeof(complex)}$。Tiling 后，一个 tile 内处理固定范围的 `iz`，使得 `in` 的访问模式在 `ixy` 维度上局部化。
 
 **Tile 大小选择**: L1 cache 约 32KB，`complex<double>` 16 bytes。建议 `TILE_SIZE = 16`，单个 tile 占用 $16  imes 64 = 1024$ bytes，远小于 L1。
 
@@ -433,7 +433,7 @@ for (int is = 0; is < nst; ++is)
 
 1. **串行瓶颈**: 三重循环完全串行，时间复杂度 $O(N_x N_y N_z)$。对于大体系（$N \sim 100$），初始化耗时显著。
 2. **负载不均衡边缘**: 虽然截断球投影大致均匀，但中心区域 $(i_x \approx 0)$ 的 stick 长度略长，静态分段的极个别线程可能多 10-20% 工作量。
-3. **内存冗余**: 线程私有数组方案需 $O(n_{ ext{xy}} \cdot T)$ 临时内存，在 $T > 64$ 且 $n_{ ext{xy}} > 10^6$ 时可能占用数百 MB。
+3. **内存冗余**: 线程私有数组方案需 $O(n_{\text{xy}} \cdot T)$ 临时内存，在 $T > 64$ 且 $n_{\text{xy}} > 10^6$ 时可能占用数百 MB。
 4. **边界处理复杂**: `xprime` 与 `gamma_only` 的组合导致 `ix_start/ix_end` 有多种分支，OpenMP 的 `schedule` 需适配不同边界。
 
 **解决方向**:
