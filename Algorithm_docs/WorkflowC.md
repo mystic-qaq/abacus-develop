@@ -15,8 +15,6 @@
 - `source/source_basis/module_pw/pw_basis_k.cpp`
     - `PW_Basis_K::setupIndGk()`：基于 $G+K$ 构建索引映射，统计 `npwk` 并生成 `igl2isz_k/igl2ig_k` 等结构。
 
-## 0.1 module_pw 内部调用链速览
-
 以下调用链均可在 module_pw 的实现或测试/注释中直接对应到。
 
 - **实空间/倒空间变换路径**（`pw_transform.cpp`）
@@ -25,7 +23,7 @@
 - **平面波基底初始化路径**（`pw_basis_k.cpp` 与 `pw_init.cpp`）
     - `initgrids()` -> `initparameters()` -> `setuptransform()`
     - `setuptransform()` 内部顺序：`distribute_r()` -> `distribute_g()` -> `getstartgr()` -> `setupIndGk()` -> `fft_bundle.initfft()`。
-- **平面波几何量构建路径**（`pw_basis.cpp` + `pw_basis_k.h` 使用示例）
+- **平面波几何量构建路径**（`pw_basis.cpp` + `pw_basis_k.h` ）
     - `setuptransform()` 完成后，调用 `collect_local_pw()` 生成 `gg/gdirect/gcar`，再调用 `collect_uniqgg()` 构建 `gg_uniq/ig2igg`。
 
 以上模块互相独立但共享同一类性能瓶颈：对连续内存的标量拷贝缺乏显式向量化提示，以及对不变数据的重复遍历与重建。
@@ -61,7 +59,7 @@ for (int iz = 0; iz < nplane; ++iz)
 
 当 `poolnproc == 1` 时，代码不走 MPI 路径，而是直接按 `istot2ixy` 在本地做连续拷贝。此时 `gatherp_scatters` 与 `gathers_scatterp` 的本质都是“按 stick 索引重排 + z 连续拷贝”，避免了额外的通信打包。
 
-此外在这段代码里，使用一维数组来存储二维的数据，保证了内存的连续性以及兼容MPI和OpenMP。首先第一步，对于一个xy平面，用`ixy`存储这个点在平面上的索引，使用公式 $ixy = y\*nx+x$ 。第二步，由于每个stick的内存地址是连续的，因此为了寻找空间坐标为`ixy`和`iz`的点，它的索引就是 $ixy\*nz+iz$ 。
+此外在这段代码里，使用一维数组来存储二维的数据，保证了内存的连续性以及兼容MPI和OpenMP。首先第一步，对于一个xy平面，用`ixy`存储这个点在平面上的索引，使用公式 $ixy = y×nx+x$ 。第二步，由于每个stick的内存地址是连续的，因此为了寻找空间坐标为`ixy`和`iz`的点，它的索引就是 $ixy×nz+iz$ 。
 
 ### 1.2 具体算法实施细节
 
@@ -116,7 +114,7 @@ for (int iz = 0; iz < nplane; ++iz)
 - 第二次遍历填充 `igl2isz_k/igl2ig_k` 索引映射。
 - 末尾调用 `get_ig2ixyz_k()` 完成后续索引派生。
 
-### 2.2 具体算法实施细节（现有实现）
+### 2.2 具体算法实施细节
 
 #### 2.2.1 `collect_local_pw()` 的逐步计算
 - **索引解码**：
