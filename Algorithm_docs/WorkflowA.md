@@ -64,12 +64,12 @@ for (int ix = ix_start; ix <= ix_end; ++ix)
 | 符号 | 代码变量 | 定义 |
 | ---- | -------- | ---- |
 | $\mathcal{I}_x, \mathcal{I}_y, \mathcal{I}_z$ | `ix, iy, iz` | 整数倒格矢索引，范围由 `xprime`/`gamma_only` 标志决定 |
-| $\mathbf{M}$ | `this->GGT` | 度规矩阵 $3 \times 3$，$\vert\mathbf{G}\vert^2 = \mathbf{f} \cdot (\mathbf{M} \mathbf{f})$ |
-| $E_{\text{cut}}$ | `this->ggecut` | 截断能量（$\vert\mathbf{G}\vert^2$ 上界） |
-| $N_x^{\text{fft}}, N_y^{\text{fft}}$ | `fftnx`, `fftny` | FFT 网格 x, y 维度 |
+| $\mathbf{M}$ | `this->GGT` | 度规矩阵 $3 \times 3$, $\vert\mathbf{G}\vert^2 = \mathbf{f} \cdot (\mathbf{M} \mathbf{f})$ |
+| $E_{\text{cut}}$ | `this->ggecut` | 截断能量, $\vert\mathbf{G}\vert^2$ 上界 |
+| $N_x^{\text{fft}}, N_y^{\text{fft}}$ | `fftnx`, `fftny` | FFT 网格 $x$, $y$ 维度 |
 | $n_{\text{xy}}$ | `fftnxy` | $N_x^{\text{fft}} \cdot N_y^{\text{fft}}$ |
-| $\text{ixy}$ | `ixy` | 线性化网格索引，$\text{ixy} = x \cdot N_y^{\text{fft}} + y$，其中 $x = i_x mod N_x$，$y = i_y mod N_y$ |
-| $L[\text{ixy}]$ | `st_length2D[ixy]` | stick 长度（该 $(i_x, i_y)$ 上满足截断的 $i_z$ 个数） |
+| $\text{ixy}$ | `ixy` | 线性化网格索引，$\text{ixy} = x \cdot N_y^{\text{fft}} + y$，其中 $x = i_x\mod N_x$, $y = i_y\mod N_y$ |
+| $L[\text{ixy}]$ | `st_length2D[ixy]` | stick 长度，该 $(i_x, i_y)$ 上满足截断的 $i_z$ 个数 |
 
 **循环边界形式化**:
 
@@ -195,22 +195,6 @@ for (int iz = iz_start; iz <= iz_end; ++iz)
    - `xprime=true/false`、`gamma_only=true/false`、`full_pw=true/false` 组合
 3. **线程安全测试**: 在 TSan/Helgrind 下运行，确认无 data race。
 
-### 2.7 性能模型与加速比上界
-
-设串行时间为 $T_1 = O(N_x N_y N_z)$，并行时间为：
-
-$$
-T_T = O\left(\frac{N_x N_y N_z}{T} + \frac{n_{\text{xy}} \cdot T}{\text{mem\_bw}} + \alpha \cdot T \right)
-$$
-
-其中 $\alpha$ 为临界区同步开销。加速比上界受限于归约阶段：
-
-$$
-S_T \leq \min\left(T, \frac{N_x N_y N_z}{n_{\text{xy}} \cdot T} \right)
-$$
-
-当 $N_z$ 较小（例如 $N_z < T$）时，按 `ix` 分段的并行度受限，此时可考虑 `collapse(2)` 合并 `ix` 和 `iy` 循环。
-
 ---
 
 ## 3. 题 3: FFT 数据重排与内存访问优化
@@ -249,8 +233,8 @@ for (int ixy = 0; ixy < nxy; ++ixy)
 
 | 数组 | 访问模式 | 步长 | 局部性 |
 | ---- | ------- | ---- | ------ |
-| `auxr` (写) | 连续 | 1 | 极好（流式写入） |
-| `in` (读) | 跨步 | $n_{\text{xy}}$ | 差（每次 `iz` 递增跳跃 $n_{\text{xy}}$） |
+| `auxr` (写) | 连续 | 1 | 好，流式写入 |
+| `in` (读) | 跨步 | $n_{\text{xy}}$ | 差，每次 `iz` 递增跳跃 $n_{\text{xy}}$ |
 
 当 $n_{\text{xy}}$ 很大（如 $256 \times 256 = 65536$）时，`in` 的跨步读取导致每次均可能 L1/L2 cache miss。
 
@@ -374,7 +358,7 @@ for (int idx = 0; idx < istot_ixy_list.size(); ++idx)
 }
 ```
 
-**注意**: 若使用 `distribution_method2`（按 $(i_x, i_y)$ 扫描顺序分配），`istot2ixy` 天然单调递增，无需额外排序。
+**注意**: 若使用 `distribution_method2` 按 $(i_x, i_y)$ 扫描顺序分配，`istot2ixy` 天然单调递增，无需额外排序。
 
 ### 3.4 P3: `gathers_scatterp` Unpack 阶段
 
@@ -394,7 +378,7 @@ for (int is = 0; is < nst; ++is)
 
 | 数组 | 访问模式 | 局部性 |
 | ---- | ------- | ------ |
-| `in` (读) | 连续（`is * nplane + iz`） | 极好 |
+| `in` (读) | 连续（`is * nplane + iz`） | 好 |
 | `out` (写) | 跨步（`ixy * nplane` 基地址跳跃） | 差 |
 
 #### 3.4.2 并行化策略
