@@ -58,3 +58,5 @@ ABACUS 使用自研的 FFT 分解流程与手动通信，而非直接依赖全�
 **Gamma-only 变体要点**：
 - 仅在 `PW_Basis`（单 k 点）中启用，`PW_Basis_K` 遇到非 Gamma k 会强制关闭。
 - 对实值输入使用 r2c/c2r 路径，并只保留半轴频域数据，`fftnx/fftny` 会缩减到 `nx/2+1` 或 `ny/2+1`。
+
+以上是对于module_pw模块总体的概要和理解。关于具体的Workflow对应的算法梳理，请参见文件夹内其他的文档WorkflowA、WorkflowB、WorkflowC和GammaOnly。
