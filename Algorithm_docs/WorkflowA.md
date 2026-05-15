@@ -64,8 +64,8 @@ for (int ix = ix_start; ix <= ix_end; ++ix)
 | 符号 | 代码变量 | 定义 |
 | ---- | -------- | ---- |
 | $\mathcal{I}_x, \mathcal{I}_y, \mathcal{I}_z$ | `ix, iy, iz` | 整数倒格矢索引，范围由 `xprime`/`gamma_only` 标志决定 |
-| $\mathbf{M}$ | `this->GGT` | 度规矩阵 $3  imes 3$，$\|\mathbf{G}\|^2 = \mathbf{f} \cdot (\mathbf{M} \mathbf{f})$ |
-| $E_{\text{cut}}$ | `this->ggecut` | 截断能量（$\|\mathbf{G}\|^2$ 上界） |
+| $\mathbf{M}$ | `this->GGT` | 度规矩阵 $3 \times 3$，$\vert\mathbf{G}\vert^2 = \mathbf{f} \cdot (\mathbf{M} \mathbf{f})$ |
+| $E_{\text{cut}}$ | `this->ggecut` | 截断能量（$\vert\mathbf{G}\vert^2$ 上界） |
 | $N_x^{\text{fft}}, N_y^{\text{fft}}$ | `fftnx`, `fftny` | FFT 网格 x, y 维度 |
 | $n_{\text{xy}}$ | `fftnxy` | $N_x^{\text{fft}} \cdot N_y^{\text{fft}}$ |
 | $\text{ixy}$ | `ixy` | 线性化网格索引，$\text{ixy} = x \cdot N_y^{\text{fft}} + y$，其中 $x = i_x mod N_x$，$y = i_y mod N_y$ |
@@ -252,7 +252,7 @@ for (int ixy = 0; ixy < nxy; ++ixy)
 | `auxr` (写) | 连续 | 1 | 极好（流式写入） |
 | `in` (读) | 跨步 | $n_{\text{xy}}$ | 差（每次 `iz` 递增跳跃 $n_{\text{xy}}$） |
 
-当 $n_{\text{xy}}$ 很大（如 $256  imes 256 = 65536$）时，`in` 的跨步读取导致每次均可能 L1/L2 cache miss。
+当 $n_{\text{xy}}$ 很大（如 $256 \times 256 = 65536$）时，`in` 的跨步读取导致每次均可能 L1/L2 cache miss。
 
 #### 3.2.2 Tiling 优化与循环重排
 
@@ -269,9 +269,9 @@ for (int iz_block = 0; iz_block < nplane; iz_block += TILE_SIZE)
 }
 ```
 
-**原理**: `iz` 内层循环连续访问 `in[ixy + iz * nxy]` 时，由于 `iz` 递增 1，地址跳跃 $n_{\text{xy}}  imes \text{sizeof(complex)}$。Tiling 后，一个 tile 内处理固定范围的 `iz`，使得 `in` 的访问模式在 `ixy` 维度上局部化。
+**原理**: `iz` 内层循环连续访问 `in[ixy + iz * nxy]` 时，由于 `iz` 递增 1，地址跳跃 $n_{\text{xy}} \times \text{sizeof(complex)}$。Tiling 后，一个 tile 内处理固定范围的 `iz`，使得 `in` 的访问模式在 `ixy` 维度上局部化。
 
-**Tile 大小选择**: L1 cache 约 32KB，`complex<double>` 16 bytes。建议 `TILE_SIZE = 16`，单个 tile 占用 $16  imes 64 = 1024$ bytes，远小于 L1。
+**Tile 大小选择**: L1 cache 约 32KB，`complex<double>` 16 bytes。建议 `TILE_SIZE = 16`，单个 tile 占用 $16 \times 64 = 1024$ bytes，远小于 L1。
 
 #### 3.2.3 OpenMP 并行策略
 
@@ -471,7 +471,7 @@ for (int is = 0; is < nst; ++is)
 **题1 单元测试**:
 
 1. **正确性**: 对比并行与串行输出的 `st_length2D`、`st_bottom2D`、`nstot`、`npwtot`，要求逐元素相等。
-2. **边界**: 测试最小网格（$4  imes 4  imes 4$）、非立方网格（$36  imes 24  imes 48$）、`full_pw=true`（全网格）。
+2. **边界**: 测试最小网格（$4 \times 4 \times 4$）、非立方网格（$36 \times 24 \times 48$）、`full_pw=true`（全网格）。
 3. **线程安全**: 在 1, 2, 4, 8, 16 线程下运行，结果一致。
 
 **题3 单元测试**:
