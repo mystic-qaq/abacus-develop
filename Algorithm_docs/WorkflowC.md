@@ -67,30 +67,31 @@ for (int iz = 0; iz < nplane; ++iz)
 以下细节对应 `pw_gatherscatter.h` 的实际实现，便于与代码逐行对照。
 
 - **单进程路径**（`poolnproc == 1`）
-    - `gatherp_scatters`：对每个 stick `is`，通过 `ixy = istot2ixy[is]` 找到平面索引，随后执行连续拷贝 `out[is*nz + iz] = in[ixy*nz + iz]`。
-    - `gathers_scatterp`：先把 `out[0..nrxx)` 清零，再按 `ixy = istot2ixy[is]` 做连续拷贝 `out[ixy*nz + iz] = in[is*nz + iz]`。
+  - `gatherp_scatters`：对每个 stick `is`，通过 `ixy = istot2ixy[is]` 找到平面索引，随后执行连续拷贝 `out[is*nz + iz] = in[ixy*nz + iz]`。
+  - `gathers_scatterp`：先把 `out[0..nrxx)` 清零，再按 `ixy = istot2ixy[is]` 做连续拷贝 `out[ixy*nz + iz] = in[is*nz + iz]`。
 - **多进程路径的三段式打包与交换**
-    - **阶段 A：本地打包/切片**
-        - `gatherp_scatters`：把稀疏平面 `(nplane, fftnxy)` 提取成紧凑 `(nplane, nstot)`，拷贝位置为 `out[istot*nplane + iz] = in[ixy*nplane + iz]`。
-        - `gathers_scatterp`：把 `(nz, ns)` 切成按目标进程分块的 `(numz[ip], ns, poolnproc)`，拷贝位置为 `out[startg[ip] + is*nzip + izip] = in[startz[ip] + is*nz + izip]`。
-    - **阶段 B：进程间交换**
-        - 使用 `MPI_Alltoallv`，发送缓冲区为 `out`，接收缓冲区为 `in`。其中 `numg/startg` 表示发送端分块，`numr/startr` 表示接收端分块。
-    - **阶段 C：本地解包/拼接**
-        - `gatherp_scatters`：把接收得到的 `(numz[ip], ns, poolnproc)` 片段拼接成 `(nz, ns)`，拷贝位置为 `out[startz[ip] + is*nz + izip] = in[startg[ip] + is*nzip + izip]`。
-        - `gathers_scatterp`：先清零 `out[0..nrxx)`，再把 `(nplane, nstot)` 解包回稀疏平面 `(nplane, fftnxy)`，拷贝位置为 `out[ixy*nplane + iz] = in[istot*nplane + iz]`。
+  - **阶段 A：本地打包/切片**
+    - `gatherp_scatters`：把稀疏平面 `(nplane, fftnxy)` 提取成紧凑 `(nplane, nstot)`，拷贝位置为 `out[istot*nplane + iz] = in[ixy*nplane + iz]`。
+    - `gathers_scatterp`：把 `(nz, ns)` 切成按目标进程分块的 `(numz[ip], ns, poolnproc)`，拷贝位置为 `out[startg[ip] + is*nzip + izip] = in[startz[ip] + is*nz + izip]`。
+  - **阶段 B：进程间交换**
+    - 使用 `MPI_Alltoallv`，发送缓冲区为 `out`，接收缓冲区为 `in`。其中 `numg/startg` 表示发送端分块，`numr/startr` 表示接收端分块。
+  - **阶段 C：本地解包/拼接**
+    - `gatherp_scatters`：把接收得到的 `(numz[ip], ns, poolnproc)` 片段拼接成 `(nz, ns)`，拷贝位置为 `out[startz[ip] + is*nz + izip] = in[startg[ip] + is*nzip + izip]`。
+    - `gathers_scatterp`：先清零 `out[0..nrxx)`，再把 `(nplane, nstot)` 解包回稀疏平面 `(nplane, fftnxy)`，拷贝位置为 `out[ixy*nplane + iz] = in[istot*nplane + iz]`。
 
 这些实现细节决定了此路径的开销结构：同一数据至少经历两次本地重排和一次全量通信，因此 SIMD 和缓存友好性非常关键。
 
 ### 1.3 逻辑局限性
+
 - **自动向量化不稳定**：`outp` 与 `inp` 可能别名，编译器不敢做 aggressive vectorize。
 - **连续访问未显式标注**：内层循环逻辑上连续，但缺少 `simd` 或 `restrict` 语义提示。
 - **拷贝粒度过小**：单元素赋值使得 cache line 无法充分填充，拷贝带宽难以饱和。
 
 ### 1.4 初步解决方向
+
 - 在 `iz/izip` 内层循环上显式添加 `#pragma omp simd`，减少编译器不确定性。
 - 若调用约定允许，增加 `__restrict__` 或等价约束来声明不重叠。
 - 对连续区域尝试 `memcpy` 或按 cache line 的块拷贝模式，以提高带宽利用率。
-
 
 ## 2. 痛点：循环内只读/不变数据的冗余重建
 
@@ -121,37 +122,42 @@ for (int iz = 0; iz < nplane; ++iz)
 ### 2.2 具体算法实施细节
 
 #### 2.2.1 `collect_local_pw()` 的逐步计算
+
 - **索引解码**：
-    - `isz = ig2isz[ig]`，`iz = isz % nz`，`is = isz / nz`，`ixy = is2fftixy[is]`。
-    - `ix = ixy / fftny`，`iy = ixy % fftny`。
+  - `isz = ig2isz[ig]`，`iz = isz % nz`，`is = isz / nz`，`ixy = is2fftixy[is]`。
+  - `ix = ixy / fftny`，`iy = ixy % fftny`。
 - **坐标折返**：
-    - 若 `ix >= nx/2 + 1` 则 `ix -= nx`，`iy` 与 `iz` 同理，确保坐标落入对称范围。
+  - 若 `ix >= nx/2 + 1` 则 `ix -= nx`，`iy` 与 `iz` 同理，确保坐标落入对称范围。
 - **几何量计算**：
-    - `f = (ix, iy, iz)`，`gg[ig] = f · (GGT · f)`。
-    - `gdirect[ig] = f`，`gcar[ig] = f · G`。
-    - 若 `gg[ig] < 1e-8`，记录 `ig_gge0` 并检查重复 Gamma 点。
+  - `f = (ix, iy, iz)`，`gg[ig] = f · (GGT · f)`。
+  - `gdirect[ig] = f`，`gcar[ig] = f · G`。
+  - 若 `gg[ig] < 1e-8`，记录 `ig_gge0` 并检查重复 Gamma 点。
 
 #### 2.2.2 `collect_uniqgg()` 的排序去重
+
 - **逐点重算 `tmpgg`**：对每个 `ig` 重新计算 $G^2$ 并写入 `tmpgg`。
 - **排序与索引重建**：调用 `heapsort(npw, tmpgg, sortindex)`，保证 `sortindex` 给出从小到大的能量序。
 - **阈值合并**：扫描 `tmpgg`，当 $|tmpgg[ig] - tmpgg2[igg]| > 1e-8$ 时新开一个 bin，否则累加并求平均。
 - **映射生成**：按 `sortindex` 把每个 `ig` 归属到 `ig2igg`，并最终写出 `gg_uniq`。
 
 #### 2.2.3 `setupIndGk()` 的双遍历构建
+
 - **遍历 1：统计 `npwk`**
-    - 对每个 `ik`，遍历所有 `ig`，计算 `gk2 = cal_GplusK_cartesian(ik, ig).norm2()`。
-    - 若 `gk2 <= gk_ecut`，计数 `ng` 并更新 `npwk_max`。
-    - `MPI_Allreduce` 检查全局是否有平面波，若 `ng == 0` 则发出警告。
+  - 对每个 `ik`，遍历所有 `ig`，计算 `gk2 = cal_GplusK_cartesian(ik, ig).norm2()`。
+  - 若 `gk2 <= gk_ecut`，计数 `ng` 并更新 `npwk_max`。
+  - `MPI_Allreduce` 检查全局是否有平面波，若 `ng == 0` 则发出警告。
 - **遍历 2：填充映射**
-    - 对每个 `ik` 再次遍历 `ig`，将满足阈值的 `ig` 写入 `igl2isz_k` 与 `igl2ig_k`。
-    - 末尾调用 `get_ig2ixyz_k()` 补充派生索引。
+  - 对每个 `ik` 再次遍历 `ig`，将满足阈值的 `ig` 写入 `igl2isz_k` 与 `igl2ig_k`。
+  - 末尾调用 `get_ig2ixyz_k()` 补充派生索引。
 
 ### 2.3 逻辑局限性
+
 - **生命周期与不变性未绑定**：`gg/gdirect/gcar` 与 `gk2` 等应与 `latvec/ggecut/kvec` 绑定，但当前每次调用均重建。
 - **双重遍历与重复计算**：`setupIndGk()` 对同一 `(ik, ig)` 重复计算 $|G+K|^2$ 。
 - **频繁分配导致抖动**：重复 `new/resize` 使得缓存失效，降低局域性。
 
 ### 2.4 初步解决方向
+
 - **缓存复用**：将 `gg/gdirect/gcar` 与 `gk2` 的构建与生命周期绑定到 `ggecut` 或晶胞变化上，非必要不重建。
 - **单次遍历复用结果**：在 `setupIndGk()` 中一次计算 `gk2` 后复用统计与索引构建，避免双重遍历。
 - **失效规则明确化**：仅当 `latvec`、`ggecut` 或 `kvec` 变化时标记失效，其他路径直接复用。

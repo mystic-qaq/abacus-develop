@@ -103,7 +103,7 @@ for (int ix = ix_start; ix <= ix_end; ++ix)
 
 ### 2.4 线程安全解决方案
 
-#### 2.4.1 方案A: 线程私有累加数组
+#### 方案A: 线程私有累加数组
 
 每个线程分配私有的 `st_len_priv[fftnxy]` 和 `st_bot_priv[fftnxy]`，在临界区外完成全部累加，最后归约到全局数组。
 
@@ -155,7 +155,7 @@ for (int ix = ix_start; ix <= ix_end; ++ix)
 - 时间: $O(N_x N_y N_z / T + n_{\text{xy}} \cdot T)$（计算 + 归约）
 - 空间: $O(n_{\text{xy}} \cdot T)$。典型场景 $n_{\text{xy}} < 10^5, T \leq 64$，总私有内存 $< 25\text{MB}$，可接受。
 
-#### 2.4.2 方案B: 原子操作
+#### 方案B: 原子操作
 
 若内存受限，可对 `st_length2D` 使用原子递增：
 
@@ -213,7 +213,7 @@ for (int iz = iz_start; iz <= iz_end; ++iz)
 
 ### 3.2 P1: `real2recip` 入口数据拷贝
 
-#### 3.2.1 现有内存访问模式分析
+#### 现有内存访问模式分析
 
 以普通模式（非 gamma_only）为例：
 
@@ -238,7 +238,7 @@ for (int ixy = 0; ixy < nxy; ++ixy)
 
 当 $n_{\text{xy}}$ 很大（如 $256 \times 256 = 65536$）时，`in` 的跨步读取导致每次均可能 L1/L2 cache miss。
 
-#### 3.2.2 Tiling 优化与循环重排
+#### Tiling 优化与循环重排
 
 通过交换循环顺序并引入分块（tiling），使 `in` 的读取落入同一 cache line：
 
@@ -257,7 +257,7 @@ for (int iz_block = 0; iz_block < nplane; iz_block += TILE_SIZE)
 
 **Tile 大小选择**: L1 cache 约 32KB，`complex<double>` 16 bytes。建议 `TILE_SIZE = 16`，单个 tile 占用 $16 \times 64 = 1024$ bytes，远小于 L1。
 
-#### 3.2.3 OpenMP 并行策略
+#### OpenMP 并行策略
 
 ```cpp
 # pragma omp parallel for collapse(2) schedule(static)
@@ -275,7 +275,7 @@ for (int iz_block = 0; iz_block < nplane; iz_block += TILE_SIZE)
 
 ### 3.3 P2: `gatherp_scatters` Pack 阶段
 
-#### 3.3.1 间接寻址与跨步读取问题
+#### 间接寻址与跨步读取问题
 
 `gatherp_scatters_pack` 将 planes 布局（`in[ixy * nplane + iz]`）重组为 sticks 布局（`out[pos + iz]`），准备 `MPI_Alltoallv` 发送。
 
@@ -299,7 +299,7 @@ for (int istot = 0; istot < nstot; ++istot)
 | (C) `offset[target_proc]` | 原子/临界区更新 | 线程竞争 |
 | (D) `in[ixy * nplane + ...]` | 基地址跳跃 | cache 预取失效 |
 
-#### 3.3.2 预计算偏移与无锁并行
+#### 预计算偏移与无锁并行
 
 **核心优化**: 通过 `exclusive_scan` 预先计算每个 stick 在输出缓冲区中的绝对位置，消除 `offset` 的动态更新竞争。
 
@@ -333,7 +333,7 @@ for (int istot = 0; istot < nstot; ++istot)
 - 消除 `offset` 的原子操作或临界区。
 - `istot` 间完全独立，线性扩展至 $T$ 线程。
 
-#### 3.3.3 Stick 局部排序优化
+#### Stick 局部排序优化
 
 `distribution_method1` 按 stick 长度降序排序后，`istot2ixy` 的 `ixy` 顺序被打乱，导致 `in` 的读取地址跳跃（`ixy` 不连续），cache 预取失效。
 
@@ -362,7 +362,7 @@ for (int idx = 0; idx < istot_ixy_list.size(); ++idx)
 
 ### 3.4 P3: `gathers_scatterp` Unpack 阶段
 
-#### 3.4.1 跨步写入问题
+#### 跨步写入问题
 
 `gathers_scatterp_unpack` 将接收后的 sticks 数据写回 planes 布局：
 
@@ -381,7 +381,7 @@ for (int is = 0; is < nst; ++is)
 | `in` (读) | 连续（`is * nplane + iz`） | 好 |
 | `out` (写) | 跨步（`ixy * nplane` 基地址跳跃） | 差 |
 
-#### 3.4.2 并行化策略
+#### 并行化策略
 
 与 P2 对称，预计算每个本地 stick 的输出位置后无锁并行：
 
