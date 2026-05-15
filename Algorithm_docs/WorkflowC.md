@@ -15,6 +15,7 @@
 - `source/source_basis/module_pw/pw_basis_k.cpp`
   - `PW_Basis_K::setupIndGk()`：基于 $G+K$ 构建索引映射，统计 `npwk` 并生成 `igl2isz_k/igl2ig_k` 等结构。
 
+## 0.1 模块涉及的各函数的调用链
 以下调用链均可在 module_pw 的实现或测试/注释中直接对应到。
 
 - **实空间/倒空间变换路径**（`pw_transform.cpp`）
@@ -27,6 +28,89 @@
   - `setuptransform()` 完成后，调用 `collect_local_pw()` 生成 `gg/gdirect/gcar`，再调用 `collect_uniqgg()` 构建 `gg_uniq/ig2igg`。
 
 以上模块互相独立但共享同一类性能瓶颈：对连续内存的标量拷贝缺乏显式向量化提示，以及对不变数据的重复遍历与重建。
+
+## 0.2 变量与函数含义速查表
+
+为便于阅读源码，本节整理了 Workflow C 相关的核心函数与变量含义。范围以 `pw_basis.h`、`pw_basis_k.h`、`pw_gatherscatter.h` 为准。
+
+### 0.2.1 关键函数
+
+| 标识符 | 位置 | 含义/作用 |
+| --- | --- | --- |
+| `gatherp_scatters()` | `PW_Basis` | 将平面数据 `(nplane, fftnxy)` 重排成 stick 数据 `(nz, ns)`，含 MPI 打包与交换。 |
+| `gathers_scatterp()` | `PW_Basis` | 将 stick 数据 `(nz, ns)` 还原为平面数据 `(nplane, fftnxy)`，含 MPI 打包与交换。 |
+| `real2recip()` | `PW_Basis` | 实空间到倒空间变换，内部调用 `fftxyfor()` + `gatherp_scatters()` + `fftzfor()`。 |
+| `recip2real()` | `PW_Basis` | 倒空间到实空间变换，内部调用 `fftzbac()` + `gathers_scatterp()` + `fftxybac()`。 |
+| `setuptransform()` | `PW_Basis/PW_Basis_K` | 分配网格与平面波并建立映射，最终初始化 FFT 句柄。 |
+| `distribute_r()` | `PW_Basis` | 在 z 方向分配实空间网格，设置 `startz/numz`。 |
+| `distribute_g()` | `PW_Basis` | 分配平面波与 stick，生成 `ig2isz/istot2ixy/is2fftixy`。 |
+| `getstartgr()` | `PW_Basis` | 生成 MPI `numg/numr/startg/startr` 的分段索引。 |
+| `collect_local_pw()` | `PW_Basis` | 计算本进程平面波的 `gg/gdirect/gcar`。 |
+| `collect_uniqgg()` | `PW_Basis` | 对 `gg` 去重并生成 `gg_uniq/ig2igg`。 |
+| `setupIndGk()` | `PW_Basis_K` | 统计 `npwk` 并生成 `igl2isz_k/igl2ig_k` 索引。 |
+| `cal_GplusK_cartesian()` | `PW_Basis_K` | 计算 $G+K$ 的笛卡尔坐标向量。 |
+
+### 0.2.2 数据分布与索引映射变量
+
+| 变量 | 类型/维度 | 含义/作用 |
+| --- | --- | --- |
+| `ig2isz` | `int[npw]` | 将局部平面波索引 `ig` 映射到 `(is, iz)` 的线性索引。 |
+| `istot2ixy` | `int[nstot]` | 全局 stick 索引 `is` 对应的 `ixy` 平面索引。 |
+| `is2fftixy` | `int[nst]` | 本进程 stick 索引 `is` 对应的 `ixy` 平面索引。 |
+| `fftixy2ip` | `int[fftnxy]` | 每个 `ixy` 平面点归属的进程 `ip`。 |
+| `nst` | 标量 | 当前进程 stick 数量。 |
+| `nstot` | 标量 | 全局 stick 总数。 |
+| `npw` | 标量 | 当前进程平面波数量。 |
+| `npwtot` | 标量 | 全局平面波总数。 |
+| `nrxx` | 标量 | 当前进程实空间网格点数。 |
+| `startz/numz` | `int[poolnproc]` | 每个进程在 z 方向的起始平面与平面数。 |
+| `numg/numr` | `int[poolnproc]` | MPI 打包发送/接收计数。 |
+| `startg/startr` | `int[poolnproc]` | MPI 打包发送/接收起始偏移。 |
+| `nplane` | 标量 | 当前进程负责的 z 平面数。 |
+
+### 0.2.3 几何与能量相关变量
+
+| 变量 | 类型/维度 | 含义/作用 |
+| --- | --- | --- |
+| `gg` | `double[npw]` | 本进程平面波的 $G^2$。 |
+| `gdirect` | `Vector3[npw]` | 直接坐标下的 $G$ 分量。 |
+| `gcar` | `Vector3[npw]` | 笛卡尔坐标下的 $G$ 分量。 |
+| `ig_gge0` | 标量 | $G^2 = 0$ 的 `ig` 索引（Gamma 点）。 |
+| `gg_uniq` | `double[ngg]` | 去重后的 $G^2$ 集合。 |
+| `ig2igg` | `int[npw]` | 平面波 `ig` 映射到 `gg_uniq` 的索引。 |
+| `ngg` | 标量 | 唯一 $G^2$ 数量。 |
+| `lat0` | 标量 | 晶格单位长度（bohr）。 |
+| `tpiba/tpiba2` | 标量 | $2\pi/lat0$ 与其平方。 |
+| `latvec` | `Matrix3` | 晶格矢量（单位 lat0）。 |
+| `G/GT/GGT` | `Matrix3` | 倒易格矢量矩阵、其转置、以及 $GGT = G \cdot GT$。 |
+| `ggecut` | 标量 | 平面波能量截断（$G^2$ 阈值，单位 $1/lat0^2$）。 |
+| `gridecut_lat` | 标量 | FFT 网格截断（单位 $1/lat0^2$）。 |
+| `gamma_only` | 布尔 | 是否使用 Gamma-only 对称性。 |
+
+### 0.2.4 FFT 网格与尺寸变量
+
+| 变量 | 类型/维度 | 含义/作用 |
+| --- | --- | --- |
+| `nx/ny/nz` | 标量 | 实空间网格维度。 |
+| `nxy/nxyz` | 标量 | 实空间网格点数（二维/三维）。 |
+| `fftnx/fftny/fftnz` | 标量 | FFT 变换使用的网格维度。 |
+| `fftnxy/fftnxyz` | 标量 | FFT 网格点数（二维/三维）。 |
+| `xprime` | 布尔 | FFT 分解方向控制（Gamma-only 时决定半谱取向）。 |
+| `poolnproc/poolrank` | 标量 | 当前 pool 中进程数量与本进程 rank。 |
+
+### 0.2.5 K 点相关变量（`PW_Basis_K`）
+
+| 变量 | 类型/维度 | 含义/作用 |
+| --- | --- | --- |
+| `nks` | 标量 | 当前 pool 的 k 点数量。 |
+| `kvec_d` | `Vector3[nks]` | k 点的直接坐标。 |
+| `kvec_c` | `Vector3[nks]` | k 点的笛卡尔坐标。 |
+| `gk_ecut` | 标量 | $(G+K)^2$ 截断阈值。 |
+| `npwk` | `int[nks]` | 每个 k 点的平面波数。 |
+| `npwk_max` | 标量 | `npwk` 的最大值。 |
+| `igl2isz_k` | `int[nks*npwk_max]` | `(ik, igl)` 映射到 `(is, iz)` 的线性索引。 |
+| `igl2ig_k` | `int[nks*npwk_max]` | `(ik, igl)` 映射到 `ig`。 |
+| `gk2` | `double[nks*npwk_max]` | 每个 k 点的 $(G+K)^2$。 |
 
 ## 1. 痛点：缺乏 SIMD 优化的散列拷贝
 
