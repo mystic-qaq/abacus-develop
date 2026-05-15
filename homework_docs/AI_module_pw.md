@@ -1,7 +1,7 @@
 # module_pw 算法文档
 
 > **模块**: ABACUS `source/source_basis/module_pw` —— 平面波基组与 FFT 变换  
-> **作者**: 算法文档工程师（基于源码与注释自动生成）  
+> **作者**: AI
 > **版本**: 1.0  
 > **约定**: 本分析采用 `xprime=true`（对称轴在 x 方向），Gamma-only 时 `fftnx` 取偶数。
 
@@ -12,7 +12,7 @@
 ### 1.1 符号表
 
 | 符号 | 代码变量 | 定义 | 类型/范围 |
-|------|----------|------|-----------|
+| ---- | -------- | ---- | --------- |
 | $\Omega$ | `omega` | 晶胞体积 | $\mathbb{R}_{>0}$ |
 | $\mathbf{a}_1, \mathbf{a}_2, \mathbf{a}_3$ | `latvec` | 实空间晶格矢量 (以 `lat0` 为单位) | $\mathbb{R}^{3\times 3}$ |
 | $\mathbf{b}_1, \mathbf{b}_2, \mathbf{b}_3$ | `G` / `GT` | 倒空间晶格矢量，$\mathbf{b}_i \cdot \mathbf{a}_j = 2\pi\delta_{ij}$ | $\mathbb{R}^{3\times 3}$ |
@@ -24,8 +24,8 @@
 | $N_x, N_y, N_z$ | `fftnx`/`nx`, `fftny`/`ny`, `nfftz`/`nz` | FFT 网格三维度 | $\mathbb{N}$ |
 | $N_{xy}$ | `fftnxy` / `nxy` | $N_x \cdot N_y$，每个 z-plane 的网格点数 | $\mathbb{N}$ |
 | $N_{xyz}$ | `nxyz` | $N_x \cdot N_y \cdot N_z$，FFT 网格总点数 | $\mathbb{N}$ |
-| $n_{\text{pw}}$ | `npw` | 当前进程的平面波总数（截断球 $|\mathbf{g}|^2 < G_{\text{cut}}$ 内） | $\mathbb{N}$ |
-| $n_{\text{pw},k}$ | `npwk[ik]` | k 点 ik 的平面波数（$|\mathbf{g}+\mathbf{k}|^2 < G_{\text{cut}}$ 内） | $\mathbb{N}$ |
+| $n_{\text{pw}}$ | `npw` | 当前进程的平面波总数（截断球 $\vert\mathbf{g}\vert^2 < G_{\text{cut}}$ 内） | $\mathbb{N}$ |
+| $n_{\text{pw},k}$ | `npwk[ik]` | k 点 ik 的平面波数（$\vert\mathbf{g}+\mathbf{k}\vert^2 < G_{\text{cut}}$ 内） | $\mathbb{N}$ |
 | $n_{\text{st}}$ | `nst` | 当前进程拥有的 sticks 数 | $\mathbb{N}$ |
 | $n_{\text{st,tot}}$ | `nstot` | 全局 sticks 总数（截断球投影到 $(i_x,i_y)$ 平面的非零点数） | $\mathbb{N}$ |
 | $n_{\text{plane}}$ | `nplane` | 当前进程拥有的 z-plane 层数 | $\mathbb{N}$ |
@@ -233,7 +233,7 @@ $$
 
 ### 3.1 `initgrids`: FFT 网格初始化
 
-```
+```python
 算法: initgrids —— FFT 网格维度确定
 输入:
     lat0:     晶格长度单位 (Bohr)
@@ -301,7 +301,7 @@ $$
 
 ### 3.2 `distributeg_method1`: 按 plane wave 数分布 sticks
 
-```
+```python
 算法: distributeg_method1 —— 按 plane wave 总数均衡分布 sticks
 输入:
     nstot:          全局 sticks 总数
@@ -350,7 +350,7 @@ $$
 
 ### 3.3 `distributeg_method2`: 按 sticks 数均衡分布
 
-```
+```python
 算法: distributeg_method2 —— 按 sticks 数量均衡分布
 输入:
     nstot:       全局 sticks 总数
@@ -404,7 +404,7 @@ $$
 
 ### 3.4 `distributer`: z-plane 划分
 
-```
+```python
 算法: distributer —— z-plane 均匀划分
 输入:
     nz:         FFT 网格 z 维度
@@ -442,7 +442,7 @@ $$
 
 ### 3.5 `real2recip` (CPU 路径): 实空间 → 倒空间
 
-```
+```python
 算法: real2recip (CPU 路径)
 输入:
     in[0..nrxx-1]:    实空间数据 (复数或实数，按 (z, x, y) 或 GPU 兼容布局)
@@ -500,7 +500,7 @@ $$
 
 ### 3.6 `recip2real` (CPU 路径): 倒空间 → 实空间
 
-```
+```python
 算法: recip2real (CPU 路径) —— real2recip 的严格逆操作
 输入:
     in[0..npw-1]:     倒空间平面波系数 c(g)
@@ -552,7 +552,7 @@ $$
 
 ### 3.7 `k_point_mapping` (PW_Basis_K): 构造 $G+k$ 截断映射
 
-```
+```python
 算法: setupIndGk —— k 点平面波截断映射构造
 输入:
     npw:           全局平面波数 (|g|^2 < G_cut)
@@ -616,14 +616,14 @@ $$
 - 每层 plane 是完整的 $N_x \times N_y$ 二维网格
 - 进程 $p$ 的实空间数据量: $\texttt{nrxx} = \text{numz}[p] \cdot N_x \cdot N_y$
 
-```
-        Nx →                    Nx →
-   ┌─────────────┐        ┌─────────────┐
+```text
+        Nx →                     Nx →
+   ┌─────────────┐           ┌─────────────┐
 Ny │  plane 0    │  proc0 Ny │  plane 0    │
 ↓  │  plane 1    │        ↓  │  plane 1    │
-   │  plane 2    │  proc1   │  plane 2    │
+   │  plane 2    │  proc1    │  plane 2    │
    │  plane 3    │           │  plane 3    │
-   └─────────────┘        └─────────────┘
+   └─────────────┘           └─────────────┘
      z-plane 连续段           z-plane 连续段
 ```
 
@@ -633,7 +633,7 @@ Ny │  plane 0    │  proc0 Ny │  plane 0    │
 - 截断球内的有效 sticks 通过 `fftixy2ip` 分配给各进程
 - 进程 $p$ 的倒空间数据量: $\text{nst\_per}[p] \cdot N_z$ 个复数
 
-```
+```text
         sticks →               sticks →
    ┌──────────────────┐   ┌──────────────────┐
 Nz │ stick_0 (proc0)  │ Nz│ stick_3 (proc1)  │
@@ -725,7 +725,7 @@ $$
 ## 附录 A: 复杂度速查表
 
 | 算法 | 时间复杂度 | 通信复杂度 | 空间复杂度 |
-|------|-----------|-----------|-----------|
+| ---- | --------- | --------- | --------- |
 | `initgrids` | $O(N_x N_y N_z)$ | 无 | $O(N_x N_y N_z)$（临时扫描） |
 | `distributeg_method1` | $O(n_{\text{st,tot}} \log n_{\text{st,tot}})$ | 无（需全局 sticks 信息） | $O(n_{\text{st,tot}})$ |
 | `distributeg_method2` | $O(n_{\text{st,tot}})$ | 无 | $O(n_{\text{st,tot}})$ |
@@ -745,11 +745,11 @@ $$
 ## 附录 B: 变量命名对照表
 
 | 数学符号 | 代码变量 (C++) | 物理/数学含义 |
-|----------|---------------|--------------|
+| -------- | ------------- | ------------ |
 | $N_x, N_y, N_z$ | `fftnx`/`nx`, `fftny`/`ny`, `nfftz`/`nz` | FFT 网格三维度 |
 | $N_{xy}$ | `fftnxy` / `nxy` | $N_x \cdot N_y$ |
 | $N_{xyz}$ | `nxyz` | $N_x \cdot N_y \cdot N_z$ |
-| $n_{\text{pw}}$ | `npw` | 当前进程平面波数（$$|\mathbf{g}|^2 < G_{\text{cut}}$$） |
+| $n_{\text{pw}}$ | `npw` | 当前进程平面波数（$$\vert\mathbf{g}\vert^2 < G_{\text{cut}}$$） |
 | $n_{\text{pw},k}$ | `npwk[ik]` | k 点 ik 的平面波数 |
 | $n_{\text{st}}$ | `nst` / `nst_per[poolrank]` | 当前进程 sticks 数 |
 | $n_{\text{st,tot}}$ | `nstot` | 全局 sticks 数 |
@@ -769,9 +769,9 @@ $$
 | $\text{npw\_per}[p]$ | `npw_per[p]` | 进程 p 拥有的平面波数 |
 | $\text{igl2isz\_k}$ | `igl2isz_k` | k 点下 (igl, ik) → (is, iz) |
 | $\text{igl2ig\_k}$ | `igl2ig_k` | k 点下 (igl, ik) → ig |
-| $\text{gg}$ | `gg` | 当前进程各平面波的 $$|\mathbf{g}|^2$$ |
-| $\text{gg\_uniq}$ | `gg_uniq` | 去重排序后的 $$|\mathbf{g}|^2$$ |
-| $\text{ngg}$ | `ngg` | 不同 $$|\mathbf{g}|^2$$ 值的数量 |
+| $\text{gg}$ | `gg` | 当前进程各平面波的 $$\vert\mathbf{g}\vert^2$$ |
+| $\text{gg\_uniq}$ | `gg_uniq` | 去重排序后的 $$\vert\mathbf{g}\vert^2$$ |
+| $\text{ngg}$ | `ngg` | 不同 $$\vert\mathbf{g}\vert^2$$ 值的数量 |
 | $g_{\text{cut}}$ | `gridecut` | FFT 网格截断半径平方 |
 | $G_{\text{cut}}$ | `ggecut` | 平面波截断半径平方 |
 | $\Omega$ | `omega` | 晶胞体积 |
@@ -790,7 +790,7 @@ $$
 ## 附录 C: 不变式与一致性条件汇总
 
 | 编号 | 不变式 | 来源 |
-|------|--------|------|
+| ---- | ------ | ---- |
 | INV-1 | $\forall$ ig, `ig2isz[ig]` 解码所得 `is` 满足 `is2fftixy[is]` 唯一对应一个 $(i_x, i_y)$ | ig2isz 定义 |
 | INV-2 | `is2fftixy[is]` 在 $i_s$ 上严格单调递增 | 分布算法 |
 | INV-3 | $\sum_p \text{numz}[p] = N_z$，区间无重叠无间隙 | distributer |
@@ -798,6 +798,6 @@ $$
 | INV-5 | `real2recip` 与 `recip2real` 的步骤严格对称 | 逆变换正确性 |
 | INV-6 | Dense grid 的 `istot2ixy` 继承 smooth grid 的 stick 顺序 | PW_Basis_Sup |
 | INV-7 | Gamma-only 时 `fftnx`（xprime=true）或 `fftny`（xprime=false）为偶数 | FFT 维度约束 |
-| INV-8 | $$|\mathbf{g}+\mathbf{k}|^2 < G_{\text{cut}}$$ 是 $$|\mathbf{g}|^2 < G_{\text{cut}}$$ 的子集 | k 点截断 |
+| INV-8 | $$\vert\mathbf{g}+\mathbf{k}\vert^2 < G_{\text{cut}}$$ 是 $$\vert\mathbf{g}\vert^2 < G_{\text{cut}}$$ 的子集 | k 点截断 |
 | INV-9 | `npwk[ik] ≤ npw` 对所有 k 点成立 | k 点截断 |
 | INV-10 | 每个 $(i_x, i_y)$ 至多对应一个 `istot2ixy` 条目 | 分布唯一性 |
