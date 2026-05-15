@@ -24,7 +24,7 @@
 
 `PW_Basis::setuptransform()` 是 WorkflowB 所需映射的入口，当前顺序为：
 
-```text
+```cpp
 distribute_r()
 distribute_g()
 getstartgr()
@@ -51,7 +51,7 @@ fft_bundle.setupFFT()
 
 `getstartgr()` 在这两类分布映射之上生成 MPI All-to-All 所需数组：
 
-```text
+```cpp
 numg[ip] = nst_per[poolrank] * numz[ip]
 numr[ip] = nst_per[ip]       * numz[poolrank]
 
@@ -65,7 +65,7 @@ startr[ip] = prefix_sum(numr)
 
 `PW_Basis_K::setuptransform()` 与 `PW_Basis::setuptransform()` 的基本分布流程一致，也会调用：
 
-```text
+```cpp
 distribute_r()
 distribute_g()
 getstartgr()
@@ -119,7 +119,7 @@ getstartgr()
 
 第一步，把 `in` 中本地 z-plane 数据按照全局 stick 顺序 pack 到 `out`：
 
-```text
+```cpp
 out[istot * nplane + iz] = in[ixy * nplane + iz]
 ```
 
@@ -127,7 +127,7 @@ out[istot * nplane + iz] = in[ixy * nplane + iz]
 
 第二步，调用阻塞式 `MPI_Alltoallv`：
 
-```text
+```cpp
 MPI_Alltoallv(
     out, numr, startr, dtype,
     in,  numg, startg, dtype,
@@ -139,7 +139,7 @@ MPI_Alltoallv(
 
 第三步，把通信后写入 `in` 的接收数据 unpack 到最终 `out`：
 
-```text
+```cpp
 out[is * nz + startz[ip] + izip]
     = in[startg[ip] + is * numz[ip] + izip]
 ```
@@ -158,7 +158,7 @@ out[is * nz + startz[ip] + izip]
 
 第一步，把 `in` 中每条本地 stick 在各目标进程 z-plane 上的片段 pack 到 `out`：
 
-```text
+```cpp
 out[startg[ip] + is * numz[ip] + izip]
     = in[is * nz + startz[ip] + izip]
 ```
@@ -167,7 +167,7 @@ out[startg[ip] + is * numz[ip] + izip]
 
 第二步，调用阻塞式 `MPI_Alltoallv`：
 
-```text
+```cpp
 MPI_Alltoallv(
     out, numg, startg, dtype,
     in,  numr, startr, dtype,
@@ -179,7 +179,7 @@ MPI_Alltoallv(
 
 第三步，先清零最终 `out`，再把通信后写入 `in` 的数据 unpack 回 xy 网格：
 
-```text
+```cpp
 out[:] = 0
 out[ixy * nplane + iz] = in[istot * nplane + iz]
 ```
@@ -191,6 +191,7 @@ out[ixy * nplane + iz] = in[istot * nplane + iz]
 `FFT_Bundle` 负责把 `PW_Basis` 的 FFT 请求转发到具体后端。CPU 路径中，z 方向 FFT 使用 `plan_many` 形式批量处理 `nst` 条长度为 `nz` 的序列。
 
 对我们来说，这带来两个约束：
+
 1. `gatherp_scatters` 返回前，`auxg` 必须已经是完整 stick-major 布局，否则 `fftzfor` 不能开始；
 2. `gathers_scatterp` 返回前，`auxr` 必须已经是完整 plane-major 布局，否则后续 xy 方向反 FFT 或 c2r 不能开始。
 
