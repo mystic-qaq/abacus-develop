@@ -61,7 +61,7 @@ for (int iz = 0; iz < nplane; ++iz)
 
 而当只有一个进程的时候，`gatherp_scatters` 里直接将当前进程分配到的z平面数设置为所有的xy切片数 `nz=nplane`；`gathers_scatterp` 里直接将当前进程分配到的stick数量设置为所有的stick数 `ns=nstot`。
 
-此外在这段代码里，使用一维数组来存储二维的数据，保证了内存的连续性以及兼容MPI和OpenMP。首先第一步，对于一个xy平面，用`ixy`存储这个点在平面上的索引，使用公式 $ixy = y*nx+x$ 。第二步，由于每个stick的内存地址是连续的，因此为了寻找空间坐标为`ixy`和`iz`的点，它的索引就是 $ixy*nz+iz$ 。
+此外在这段代码里，使用一维数组来存储二维的数据，保证了内存的连续性以及兼容MPI和OpenMP。首先第一步，对于一个xy平面，用`ixy`存储这个点在平面上的索引，使用公式 $ixy = y\*nx+x$ 。第二步，由于每个stick的内存地址是连续的，因此为了寻找空间坐标为`ixy`和`iz`的点，它的索引就是 $ixy\*nz+iz$ 。
 
 ### 1.2 逻辑局限性
 - **自动向量化不稳定**：`outp` 与 `inp` 可能别名，编译器不敢做 aggressive vectorize。
