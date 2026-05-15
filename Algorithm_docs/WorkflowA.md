@@ -68,7 +68,7 @@ for (int ix = ix_start; ix <= ix_end; ++ix)
 | $E_{\text{cut}}$ | `this->ggecut` | 截断能量, $\vert\mathbf{G}\vert^2$ 上界 |
 | $N_x^{\text{fft}}, N_y^{\text{fft}}$ | `fftnx`, `fftny` | FFT 网格 $x$, $y$ 维度 |
 | $n_{\text{xy}}$ | `fftnxy` | $N_x^{\text{fft}} \cdot N_y^{\text{fft}}$ |
-| $\text{ixy}$ | `ixy` | 线性化网格索引，$\text{ixy} = x \cdot N_y^{\text{fft}} + y$，其中 $x = i_x\mod N_x$, $y = i_y\mod N_y$ |
+| $\text{ixy}$ | `ixy` | 线性化网格索引, $\text{ixy} = x \cdot N_y^{\text{fft}} + y$，其中 $x = i_x\mod N_x$, $y = i_y\mod N_y$ |
 | $L[\text{ixy}]$ | `st_length2D[ixy]` | stick 长度，该 $(i_x, i_y)$ 上满足截断的 $i_z$ 个数 |
 
 **循环边界形式化**:
@@ -190,7 +190,7 @@ for (int iz = iz_start; iz <= iz_end; ++iz)
 
 1. **结果一致性**: 并行版本的 `st_length2D`、`st_bottom2D`、`nstot`、`npwtot` 必须与串行版本按位一致。
 2. **边界测试**:
-   - 不同网格大小（$36^3, 40^3, 42^3$）
+   - 不同网格大小 $36^3, 40^3, 42^3$
    - 不同截断能量
    - `xprime=true/false`、`gamma_only=true/false`、`full_pw=true/false` 组合
 3. **线程安全测试**: 在 TSan/Helgrind 下运行，确认无 data race。
@@ -415,7 +415,7 @@ for (int is = 0; is < nst; ++is)
 
 ### 4.1 `count_pw_st` 的局限性
 
-1. **串行瓶颈**: 三重循环完全串行，时间复杂度 $O(N_x N_y N_z)$。对于大体系（$N \sim 100$），初始化耗时显著。
+1. **串行瓶颈**: 三重循环完全串行，时间复杂度 $O(N_x N_y N_z)$。对于大体系 $N \sim 100$ ，初始化耗时显著。
 2. **负载不均衡边缘**: 虽然截断球投影大致均匀，但中心区域 $(i_x \approx 0)$ 的 stick 长度略长，静态分段的极个别线程可能多 10-20% 工作量。
 3. **内存冗余**: 线程私有数组方案需 $O(n_{\text{xy}} \cdot T)$ 临时内存，在 $T > 64$ 且 $n_{\text{xy}} > 10^6$ 时可能占用数百 MB。
 4. **边界处理复杂**: `xprime` 与 `gamma_only` 的组合导致 `ix_start/ix_end` 有多种分支，OpenMP 的 `schedule` 需适配不同边界。
@@ -455,7 +455,7 @@ for (int is = 0; is < nst; ++is)
 **题1 单元测试**:
 
 1. **正确性**: 对比并行与串行输出的 `st_length2D`、`st_bottom2D`、`nstot`、`npwtot`，要求逐元素相等。
-2. **边界**: 测试最小网格（$4 \times 4 \times 4$）、非立方网格（$36 \times 24 \times 48$）、`full_pw=true`（全网格）。
+2. **边界**: 测试最小网格 $4 \times 4 \times 4$ 、非立方网格 $36 \times 24 \times 48$ 、`full_pw=true`（全网格）。
 3. **线程安全**: 在 1, 2, 4, 8, 16 线程下运行，结果一致。
 
 **题3 单元测试**:
