@@ -15,6 +15,7 @@ namespace ModulePW
 template <typename T>
 void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
 {
+    ModuleBase::timer::start(this->classname, "gatherp_scatters");
     
     if(this->poolnproc == 1) //In this case nst=nstot, nz = nplane, 
     {
@@ -34,6 +35,7 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
                 outp[iz] = inp[iz];
             }
         }
+        ModuleBase::timer::end(this->classname, "gatherp_scatters");
         return;
     }
 
@@ -41,6 +43,7 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
 #ifdef __MPI
     //change (nplane fftnxy) to (nplane,nstot)
     // Hence, we can send them at one time.
+    ModuleBase::timer::start(this->classname, "gatherp_pack");
     const int nstot_gps = this->nstot;
     const int nplane_gps = this->nplane;
     const int* istot2ixy_gps = this->istot2ixy;
@@ -57,9 +60,11 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
             outp[iz] = inp[iz];
         }
     }
+    ModuleBase::timer::end(this->classname, "gatherp_pack");
 
     //exchange data
     //(nplane,nstot) to (numz[ip],ns, poolnproc)
+    ModuleBase::timer::start(this->classname, "gatherp_alltoallv");
     if(typeid(T) == typeid(double))
     {
         MPI_Alltoallv(out, numr, startr, MPI_DOUBLE_COMPLEX, in, numg, startg, MPI_DOUBLE_COMPLEX, this->pool_world);
@@ -72,8 +77,10 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
     {
         ModuleBase::WARNING_QUIT("PW_Basis::gatherp_scatters", "Unsupported data type for MPI_Alltoallv");
     }
+    ModuleBase::timer::end(this->classname, "gatherp_alltoallv");
 
     // change (nz,ns) to (numz[ip],ns, poolnproc)
+    ModuleBase::timer::start(this->classname, "gatherp_unpack");
     const int poolnproc_gps = this->poolnproc;
     const int nst_gps = this->nst;
     const int nz_gps = this->nz;
@@ -98,7 +105,9 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
             }
         }
     }
+    ModuleBase::timer::end(this->classname, "gatherp_unpack");
 #endif
+    ModuleBase::timer::end(this->classname, "gatherp_scatters");
     return;
 }
 
@@ -112,6 +121,7 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
 template <typename T>
 void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
 {
+    ModuleBase::timer::start(this->classname, "gathers_scatterp");
     if(this->poolnproc == 1) //In this case nrxx=fftnx*fftny*nz, nst = nstot, 
     {
         const int nrxx_ = this->nrxx;
@@ -139,6 +149,7 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
                 outp[iz] = inp[iz];
             }
         }
+        ModuleBase::timer::end(this->classname, "gathers_scatterp");
         return;
     }
 
@@ -146,6 +157,7 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
 #ifdef __MPI
     // change (nz,ns) to (numz[ip],ns, poolnproc)
     // Hence, we can send them at one time. 
+    ModuleBase::timer::start(this->classname, "gathers_pack");
     const int poolnproc_ = this->poolnproc;
     const int nst_ = this->nst;
     const int nz_ = this->nz;
@@ -170,9 +182,11 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
             }
         }
     }
+    ModuleBase::timer::end(this->classname, "gathers_pack");
 
     //exchange data
     //(numz[ip],ns, poolnproc) to (nplane,nstot)
+    ModuleBase::timer::start(this->classname, "gathers_alltoallv");
     if(typeid(T) == typeid(double))
     {
         MPI_Alltoallv(out, numg, startg, MPI_DOUBLE_COMPLEX, in, numr, startr, MPI_DOUBLE_COMPLEX, this->pool_world);
@@ -185,7 +199,9 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
     {
         ModuleBase::WARNING_QUIT("PW_Basis::gathers_scatterp", "Unsupported data type for MPI_Alltoallv");
     }
+    ModuleBase::timer::end(this->classname, "gathers_alltoallv");
 
+    ModuleBase::timer::start(this->classname, "gathers_clear");
     const int nrxx_gsp = this->nrxx;
 #ifdef _OPENMP
     #pragma omp parallel for schedule(static)
@@ -194,7 +210,10 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
     {
         out[i] = std::complex<T>(0, 0);
     }
+    ModuleBase::timer::end(this->classname, "gathers_clear");
+
     //change (nplane,nstot) to (nplane fftnxy)
+    ModuleBase::timer::start(this->classname, "gathers_unpack");
     const int nstot = this->nstot;
     const int nplane = this->nplane;
     const int* istot2ixy = this->istot2ixy;
@@ -212,7 +231,9 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
             outp[iz] = inp[iz];
         }
     }
+    ModuleBase::timer::end(this->classname, "gathers_unpack");
 #endif
+    ModuleBase::timer::end(this->classname, "gathers_scatterp");
     return;
 }
 

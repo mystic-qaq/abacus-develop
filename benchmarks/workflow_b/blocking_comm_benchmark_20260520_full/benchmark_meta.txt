@@ -1,0 +1,10 @@
+ABACUS_BIN=/home/yangxu/abacus-develop/build-current-abacus-mpi-local/abacus_pw_para
+MPIEXEC=/usr/bin/mpirun.openmpi
+BASE_CASE=/home/yangxu/abacus-develop/tests/01_PW/008_PW_UPF201_USPP_NaCl
+CONFIGS=1x1 2x1 4x1 8x1 4x2 8x2
+SCALES=small:30:500 medium:40:1000 large:50:2000
+REPEATS=3
+SCF_NMAX=3
+SCF_THR=1e-30
+NBANDS=24
+Wed May 20 21:12:11 CST 2026
