@@ -1,0 +1,36 @@
+Info: Local MPI proc number: 2,OpenMP thread number: 4,Total thread number: 8,Local thread limit: 24
+--------------------------------------------------------------------------
+Primary job  terminated normally, but 1 process returned
+a non-zero exit code. Per user-direction, the job has been aborted.
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+mpirun detected that one or more processes exited with non-zero status, thus causing
+the job to be terminated. The first process to do so was:
+
+  Process name: [[60645,1],0]
+  Exit code:    1
+--------------------------------------------------------------------------
+Command exited with non-zero status 1
+	Command being timed: "/usr/bin/mpirun --bind-to none -np 2 /mnt/d/__Coding__/github/abacus-develop/build_baseline/abacus_pw_para"
+	User time (seconds): 0.14
+	System time (seconds): 0.26
+	Percent of CPU this job got: 25%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:01.58
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 24324
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 58
+	Minor (reclaiming a frame) page faults: 4259
+	Voluntary context switches: 1434
+	Involuntary context switches: 17
+	Swaps: 0
+	File system inputs: 2936
+	File system outputs: 184
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 1

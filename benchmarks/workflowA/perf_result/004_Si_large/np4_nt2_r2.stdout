@@ -1,0 +1,78 @@
+                                                                                     
+                              ABACUS v3.11.0-beta.2
+
+               Atomic-orbital Based Ab-initio Computation at UStc                    
+
+                     Website: http://abacus.ustc.edu.cn/                             
+               Documentation: https://abacus.deepmodeling.com/                       
+                  Repository: https://github.com/abacusmodeling/abacus-develop       
+                              https://github.com/deepmodeling/abacus-develop         
+                      Commit: 23947d864 (Fri May 15 19:02:20 2026 +0800)
+
+ Sat May 23 21:58:57 2026
+ MAKE THE DIR         : OUT.autotest/
+ RUNNING WITH DEVICE  : CPU / Intel(R) Core(TM) i7-14650HX (x1)
+ WARNING: some of potential function is set to zero cause of less than 1e-30.
+ UNIFORM GRID DIM     : 45 * 45 * 45
+ UNIFORM GRID DIM(BIG): 45 * 45 * 45
+ DONE(0.34582    SEC) : SYMMETRY
+ DONE(0.346057   SEC) : SETUP UNITCELL
+ DONE(0.392002   SEC) : INIT K-POINTS
+ ----------------------------------------------------------------
+ Self-consistent calculations for electrons
+ ----------------------------------------------------------------
+ SPIN    KPOINTS         PROCESSES   THREADS/PROC  THREADS/TOTAL 
+ 1       3               4           2             8             
+ ----------------------------------------------------------------
+ Use plane wave basis
+ ----------------------------------------------------------------
+ ELEMENT NATOM       
+ Si      2           
+ ----------------------------------------------------------------
+ Initial plane wave basis and FFT box
+ ----------------------------------------------------------------
+ DONE(0.410404   SEC) : INIT PLANEWAVE
+ START CHARGE         : ATOMIC
+ DONE(0.420625   SEC) : LOCAL POTENTIAL
+ DONE(0.437445   SEC) : NON-LOCAL POTENTIAL
+ MEMORY FOR PSI (MB)  : 0.306519
+ DONE(0.455829   SEC) : INIT BASIS
+
+ ================================================================
+ SELF-CONSISTENT: 
+ ================================================================
+ DONE(0.482591   SEC) : INIT SCF
+ ITER       ETOT/eV          EDIFF/eV         DRHO     TIME/s
+ CG1     -2.61160831e+02   0.00000000e+00   1.1719e-01   0.04
+ CG2     -2.61203308e+02  -4.24761745e-02   8.7714e-03   0.04
+ CG3     -2.61213593e+02  -1.02852362e-02   6.5212e-05   0.04
+ CG4     -2.61214219e+02  -6.25759141e-04   3.5805e-06   0.04
+ CG5     -2.61214221e+02  -2.74218785e-06   6.1536e-08   0.04
+ CG6     -2.61214222e+02  -4.16131377e-07   3.7353e-09   0.05
+ CG7     -2.61214222e+02  -3.25521699e-09   2.9810e-11   0.04
+ CG8     -2.61214222e+02  -1.92285180e-10   3.3009e-13   0.05
+ CG9     -2.61214222e+02  -2.75521752e-12   1.2064e-15   0.05
+ CG10    -2.71762629e+02  -1.05484069e+01   1.7395e-02   0.12
+ m = 1
+j = 0 lagrange norm = -4.67495
+j = 1 lagrange norm = 3.7328
+ in DiagoCG, psi norm = -2.81067
+ This may be due to npwx < nbands: the number of plane waves is less than
+ the number of bands, leading to a rank-deficient problem.
+ Please increase ecutwfc or reduce nbands.
+ If you use GNU compiler, it may due to the zdotc is unavailable.
+ 
+ ---------------------------------------------------------
+                         !NOTICE!                         
+ ---------------------------------------------------------
+ 
+ psi_norm <= 0.0
+ CHECK IN FILE : OUT.autotest/warning.log
+ 
+ For detailed manual of ABACUS, please see the website
+ https://abacus.deepmodeling.com
+ For any questions, propose issues on the website
+ https://github.com/deepmodeling/abacus-develop/issues
+ ---------------------------------------------------------
+                         !NOTICE!                         
+ ---------------------------------------------------------
