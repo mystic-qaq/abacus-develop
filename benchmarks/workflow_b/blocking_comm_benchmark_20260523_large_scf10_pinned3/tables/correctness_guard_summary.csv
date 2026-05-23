@@ -1,0 +1,7 @@
+case,config,scf_nmax,scf_thr,status,scf_iterations,final_drho,final_etot_ev,wall_s,case_dir
+NaCl USPP,1x1,200,1e-13,converged,21,5.6434e-14,-1671.8402255281856,83.62,/home/yangxu/abacus-develop/benchmarks/workflow_b/blocking_comm_benchmark_20260523_large_scf10_pinned3/runs/correctness_tight_e13/nacl_uspp/large_rep01_np1_omp1
+NaCl USPP,8x2,200,1e-13,converged,18,5.9076e-14,-1671.8402255278688,10.72,/home/yangxu/abacus-develop/benchmarks/workflow_b/blocking_comm_benchmark_20260523_large_scf10_pinned3/runs/correctness_tight_e13/nacl_uspp/large_rep01_np8_omp2
+HCl USPP,1x1,200,1e-13,converged,16,2.8484e-14,-427.56610592065465,18.84,/home/yangxu/abacus-develop/benchmarks/workflow_b/blocking_comm_benchmark_20260523_large_scf10_pinned3/runs/correctness_tight_e13/hcl_uspp/large_rep01_np1_omp1
+HCl USPP,8x2,200,1e-13,converged,16,2.8754e-14,-427.56610591938227,4.44,/home/yangxu/abacus-develop/benchmarks/workflow_b/blocking_comm_benchmark_20260523_large_scf10_pinned3/runs/correctness_tight_e13/hcl_uspp/large_rep01_np8_omp2
+Si BLPS,1x1,200,1e-13,converged,10,2.4037e-14,-216.0149983621669,10.53,/home/yangxu/abacus-develop/benchmarks/workflow_b/blocking_comm_benchmark_20260523_large_scf10_pinned3/runs/correctness_tight_e13/si_blps/large_rep01_np1_omp1
+Si BLPS,8x2,200,1e-13,converged,10,2.4031e-14,-216.0149983622329,3.04,/home/yangxu/abacus-develop/benchmarks/workflow_b/blocking_comm_benchmark_20260523_large_scf10_pinned3/runs/correctness_tight_e13/si_blps/large_rep01_np8_omp2

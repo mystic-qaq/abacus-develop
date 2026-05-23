@@ -1,0 +1,10 @@
+ABACUS_BIN=/home/yangxu/abacus-develop/build-current-abacus-mpi-local/abacus_pw_para
+MPIEXEC=/home/yangxu/abacus-develop/benchmarks/workflow_b/blocking_comm_benchmark_20260523_large_scf10_pinned3/bin/mpirun_pe.sh
+BASE_CASE=/home/yangxu/abacus-develop/benchmarks/workflow_b/blocking_comm_benchmark_20260523_large_scf10_pinned3/prepared_cases/si_blps
+CONFIGS=1x1 2x1 4x1 8x1 4x2 8x2
+SCALES=large:50:2000
+REPEATS=3
+SCF_NMAX=10
+SCF_THR=1e-30
+NBANDS=24
+Sat May 23 12:39:25 CST 2026

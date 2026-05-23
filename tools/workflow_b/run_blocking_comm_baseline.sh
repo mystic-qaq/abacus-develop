@@ -14,6 +14,7 @@ SCF_THR="${SCF_THR:-1e-30}"
 NBANDS="${NBANDS:-16}"
 ECUTWFC="${ECUTWFC:-8}"
 ECUTRHO="${ECUTRHO:-160}"
+CASE_PREFIX="${CASE_PREFIX:-}"
 
 if [[ ! -x "${ABACUS_BIN}" ]]; then
     echo "ABACUS binary is not executable: ${ABACUS_BIN}" >&2
@@ -35,6 +36,7 @@ mkdir -p "${OUT_DIR}"
     echo "SCF_NMAX=${SCF_NMAX}"
     echo "SCF_THR=${SCF_THR}"
     echo "NBANDS=${NBANDS}"
+    echo "CASE_PREFIX=${CASE_PREFIX}"
     date
 } > "${OUT_DIR}/benchmark_meta.txt"
 
@@ -50,7 +52,7 @@ for scale in ${SCALES}; do
         for cfg in ${CONFIGS}; do
             np="${cfg%x*}"
             omp="${cfg#*x}"
-            case_dir="${OUT_DIR}/nacl_${scale_name}_rep${rep_label}_np${np}_omp${omp}"
+            case_dir="${OUT_DIR}/${CASE_PREFIX}${scale_name}_rep${rep_label}_np${np}_omp${omp}"
             mkdir -p "${case_dir}"
             cp "${BASE_CASE}/STRU" "${BASE_CASE}/KPT" "${case_dir}/"
 

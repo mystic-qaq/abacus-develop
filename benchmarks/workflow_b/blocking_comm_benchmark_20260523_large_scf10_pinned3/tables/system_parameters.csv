@@ -1,0 +1,4 @@
+case,atoms,ecutwfc,ecutrho,nbands,k_points,wave_fft_grid,dense_fft_grid,wave_sticks,dense_sticks,plane_waves
+NaCl USPP,2,50,2000,24,1 1 2 Gamma,30 x 30 x 30,96 x 96 x 96,163,5587,1411
+HCl USPP,2,50,2000,24,2 2 2 Gamma,24 x 24 x 24,72 x 72 x 72,109,3367,725
+Si BLPS,2,50,2000,24,2 2 2 Gamma,36 x 36 x 36,108 x 108 x 108,211,7219,2085

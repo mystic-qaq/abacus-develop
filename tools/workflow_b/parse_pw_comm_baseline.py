@@ -33,7 +33,7 @@ ROW_RE = re.compile(
 
 RANK_RE = re.compile(r"(?:_cpu|_)(?P<rank>\d+)\.log$")
 CASE_RE = re.compile(
-    r"(?:nacl_)?(?:(?P<scale>[A-Za-z0-9-]+)_)?(?:rep(?P<repeat>\d+)_)?np(?P<nproc>\d+)_omp(?P<omp>\d+)"
+    r"(?:(?P<scale>[A-Za-z0-9_-]+?)_)?(?:rep(?P<repeat>\d+)_)?np(?P<nproc>\d+)_omp(?P<omp>\d+)"
 )
 REAL_RE = re.compile(r"^real\s+(?P<seconds>[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)$")
 
@@ -66,8 +66,11 @@ def case_config(case_dir: Path) -> dict[str, str]:
     match = CASE_RE.search(case_dir.name)
     if not match:
         return {"scale": "", "repeat": "", "nproc": "", "omp": ""}
+    scale = match.group("scale") or "single"
+    if scale in {"nacl_small", "nacl_medium", "nacl_large"}:
+        scale = scale.removeprefix("nacl_")
     return {
-        "scale": match.group("scale") or "single",
+        "scale": scale,
         "repeat": match.group("repeat") or "1",
         "nproc": match.group("nproc"),
         "omp": match.group("omp"),

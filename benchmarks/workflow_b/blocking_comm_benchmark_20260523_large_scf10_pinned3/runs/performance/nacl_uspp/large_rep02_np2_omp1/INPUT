@@ -1,0 +1,33 @@
+INPUT_PARAMETERS
+#Parameters (1.General)
+suffix            workflowB_large_r02_np2_omp1
+calculation       scf
+nbands            24
+symmetry          1
+latname           fcc
+pseudo_dir        /home/yangxu/abacus-develop/tests/PP_ORB
+pw_seed           1
+
+#Parameters (2.Iteration)
+ecutwfc           50
+ecutrho           2000
+scf_thr           1e-30
+scf_nmax          10
+
+#Parameters (3.Basis)
+basis_type        pw
+
+#Parameters (4.Smearing)
+smearing_method   gaussian
+smearing_sigma    0.02
+
+#parameters (5.Mixing)
+mixing_type       pulay
+mixing_beta       0.4
+
+pseudo_mesh       1
+pseudo_rcut       10
+
+cal_force         1
+cal_stress        1
+out_alllog        1

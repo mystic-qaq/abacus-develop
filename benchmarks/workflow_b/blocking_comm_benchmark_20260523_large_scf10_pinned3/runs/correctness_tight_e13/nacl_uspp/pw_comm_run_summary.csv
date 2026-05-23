@@ -1,0 +1,5 @@
+case,scale,repeat,nproc,omp,wall_s,class_name,comm_rank_avg_s,comm_critical_s,wait_proxy_max_s,overlap_candidate_rank_avg_s,gatherp_comm_critical_s,gathers_comm_critical_s
+large_rep01_np1_omp1,large,01,1,1,83.62,PW_Basis_K,0.0,0.0,0.0,0.0,0.0,0.0
+large_rep01_np1_omp1,large,01,1,1,83.62,PW_Basis_Sup,0.0,0.0,0.0,0.0,0.0,0.0
+large_rep01_np8_omp2,large,01,8,2,10.72,PW_Basis_K,0.21800324999999998,0.324002,0.149766,0.035594375,0.222999,0.101003
+large_rep01_np8_omp2,large,01,8,2,10.72,PW_Basis_Sup,0.30345274999999994,0.362757,0.085318,0.15658362500000003,0.155887,0.20687

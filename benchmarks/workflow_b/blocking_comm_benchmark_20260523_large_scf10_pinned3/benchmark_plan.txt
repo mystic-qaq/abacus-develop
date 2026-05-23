@@ -1,0 +1,24 @@
+Workflow B blocking communication benchmark, affinity-fixed rerun
+
+Performance matrix:
+  cases: NaCl USPP, HCl/Cl USPP, Si BLPS
+  scale: large only, ecutwfc=50 Ry, ecutrho=2000 Ry
+  configs: 1x1 2x1 4x1 8x1 4x2 8x2
+  repeats: 3
+  scf_nmax: 10
+  scf_thr: 1e-30
+  nbands: 24
+  MPI binding: mpirun --map-by slot:PE=${OMP_NUM_THREADS} --bind-to core
+  OpenMP binding: OMP_PLACES=cores, OMP_PROC_BIND=spread
+
+Correctness guard:
+  cases: NaCl USPP, HCl/Cl USPP, Si BLPS
+  configs: 1x1 8x2
+  repeats: 1
+  scf_nmax: 200
+  scf_thr: 1e-13
+
+Strictness note:
+  scf_thr=1e-14 was attempted separately. NaCl USPP converged, but HCl USPP and
+  Si BLPS hit psi_norm <= 0.0 near the 1e-14 DRHO level, so the formal guard is
+  the stable 1e-13 three-case guard plus the recorded 1e-14 attempt log.
