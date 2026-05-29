@@ -422,7 +422,7 @@ public:
     void gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const;
 
     template <typename T>
-    std::complex<T>* acquire_comm_sendbuf(const int size) const;
+    std::complex<T>* acquire_comm_workbuf(const int size) const;
 
   public:
     //get fftixy2is;
@@ -445,22 +445,22 @@ protected:
   std::string precision = "double"; ///< single, double, mixing
   bool double_data_ = true;         ///<  if has double data
   bool float_data_ = false;         ///< if has float data
-  mutable std::vector<std::complex<float>> comm_sendbuf_float_;
-  mutable std::vector<std::complex<double>> comm_sendbuf_double_;
+  mutable std::vector<std::complex<float>> comm_workbuf_float_;
+  mutable std::vector<std::complex<double>> comm_workbuf_double_;
 };
 
 template <>
-inline std::complex<float>* PW_Basis::acquire_comm_sendbuf<float>(const int size) const
+inline std::complex<float>* PW_Basis::acquire_comm_workbuf<float>(const int size) const
 {
-    this->comm_sendbuf_float_.resize(size);
-    return this->comm_sendbuf_float_.data();
+    this->comm_workbuf_float_.resize(size);
+    return this->comm_workbuf_float_.data();
 }
 
 template <>
-inline std::complex<double>* PW_Basis::acquire_comm_sendbuf<double>(const int size) const
+inline std::complex<double>* PW_Basis::acquire_comm_workbuf<double>(const int size) const
 {
-    this->comm_sendbuf_double_.resize(size);
-    return this->comm_sendbuf_double_.data();
+    this->comm_workbuf_double_.resize(size);
+    return this->comm_workbuf_double_.data();
 }
 }
 #endif // PWBASIS_H

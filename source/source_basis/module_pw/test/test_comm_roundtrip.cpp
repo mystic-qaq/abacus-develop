@@ -102,9 +102,8 @@ void expect_stick_major_equal(const BasisType& pw, const std::complex<double>* s
         }
     }
 }
-} // namespace
 
-TEST_F(PWTEST, test_comm_roundtrip_pw_basis)
+bool case_has_zero_plane_stress(const int nx, const int ny, const int nz)
 {
     PW_Basis_Comm_Accessor pwtest(device_flag, precision_flag);
     ModuleBase::Matrix3 latvec(1, 0, 0, 0, 1, 0, 0, 0, 1);
@@ -114,7 +113,31 @@ TEST_F(PWTEST, test_comm_roundtrip_pw_basis)
 #ifdef __MPI
     pwtest.initmpi(nproc_in_pool, rank_in_pool, POOL_WORLD);
 #endif
-    pwtest.initgrids(lat0, latvec, 10, 10, 10);
+    pwtest.initgrids(lat0, latvec, nx, ny, nz);
+    pwtest.initparameters(false, wfcecut, 1, true);
+    pwtest.setuptransform();
+
+#ifdef __MPI
+    const int local_stress = (pwtest.nplane == 0 && pwtest.nst > 0) ? 1 : 0;
+    int any_stress = 0;
+    MPI_Allreduce(&local_stress, &any_stress, 1, MPI_INT, MPI_MAX, POOL_WORLD);
+    return any_stress == 1;
+#else
+    return false;
+#endif
+}
+
+void run_comm_roundtrip_case(const int nx, const int ny, const int nz)
+{
+    PW_Basis_Comm_Accessor pwtest(device_flag, precision_flag);
+    ModuleBase::Matrix3 latvec(1, 0, 0, 0, 1, 0, 0, 0, 1);
+    const double lat0 = 4.0;
+    const double wfcecut = 20.0;
+
+#ifdef __MPI
+    pwtest.initmpi(nproc_in_pool, rank_in_pool, POOL_WORLD);
+#endif
+    pwtest.initgrids(lat0, latvec, nx, ny, nz);
     pwtest.initparameters(false, wfcecut, 1, true);
     pwtest.setuptransform();
 
@@ -142,4 +165,38 @@ TEST_F(PWTEST, test_comm_roundtrip_pw_basis)
     delete[] plane_ref;
     delete[] plane_out;
     delete[] sticks;
+}
+} // namespace
+
+TEST_F(PWTEST, test_comm_roundtrip_pw_basis)
+{
+    run_comm_roundtrip_case(10, 10, 10);
+}
+
+TEST_F(PWTEST, test_comm_roundtrip_pw_basis_zero_plane_pressure)
+{
+    const int candidate_cases[][3] = {
+        {10, 10, 2},
+        {16, 16, 2},
+        {20, 20, 2},
+        {24, 24, 2},
+        {20, 20, 3},
+        {24, 24, 3},
+        {32, 16, 2},
+        {32, 32, 2},
+    };
+
+    for (const auto& candidate_case : candidate_cases)
+    {
+        const int nx = candidate_case[0];
+        const int ny = candidate_case[1];
+        const int nz = candidate_case[2];
+        if (case_has_zero_plane_stress(nx, ny, nz))
+        {
+            run_comm_roundtrip_case(nx, ny, nz);
+            return;
+        }
+    }
+
+    GTEST_SKIP() << "No zero-plane/stick stress layout found for the current MPI decomposition.";
 }

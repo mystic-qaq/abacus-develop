@@ -17,8 +17,8 @@ template <typename T>
 void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
 {
     ModuleBase::timer::start(this->classname, "gatherp_scatters");
-    
-    if(this->poolnproc == 1) //In this case nst=nstot, nz = nplane, 
+
+    if(this->poolnproc == 1) //In this case nst=nstot, nz = nplane,
     {
         const int nst_ = this->nst;
         const int nz_ = this->nz;
@@ -55,18 +55,26 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
     const int poolrank_gps = this->poolrank;
     const int poolnproc_gps = this->poolnproc;
     const int send_count_gps = startr_gps[poolnproc_gps - 1] + numr_gps[poolnproc_gps - 1];
-    std::complex<T>* sendbuf = this->acquire_comm_sendbuf<T>(send_count_gps);
-#ifdef _OPENMP
-    #pragma omp parallel for
-#endif
-    for (int istot = 0; istot < nstot_gps; ++istot)
+    const int recv_count_gps = startg_gps[poolnproc_gps - 1] + numg_gps[poolnproc_gps - 1];
+    std::complex<T>* commbuf = this->acquire_comm_workbuf<T>(send_count_gps + recv_count_gps);
+    std::complex<T>* sendbuf = commbuf;
+    // Keep a dedicated receive slice so ranks with zero local planes do not
+    // need their logical input array to also satisfy the receive-buffer bound.
+    std::complex<T>* recvbuf = commbuf + send_count_gps;
+    if (nplane_gps > 0)
     {
-        int ixy = istot2ixy_gps[istot];
-        std::complex<T> *outp = &sendbuf[istot * nplane_gps];
-        std::complex<T> *inp = &in[ixy * nplane_gps];
-        for (int iz = 0; iz < nplane_gps; ++iz)
+#ifdef _OPENMP
+        #pragma omp parallel for
+#endif
+        for (int istot = 0; istot < nstot_gps; ++istot)
         {
-            outp[iz] = inp[iz];
+            int ixy = istot2ixy_gps[istot];
+            std::complex<T> *outp = &sendbuf[istot * nplane_gps];
+            std::complex<T> *inp = &in[ixy * nplane_gps];
+            for (int iz = 0; iz < nplane_gps; ++iz)
+            {
+                outp[iz] = inp[iz];
+            }
         }
     }
     ModuleBase::timer::end(this->classname, "gatherp_pack");
@@ -100,7 +108,7 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
         {
             continue;
         }
-        MPI_Irecv(&in[startg_gps[ip]], numg_gps[ip], mpi_type, ip, 0, this->pool_world, &recv_requests[ip]);
+        MPI_Irecv(&recvbuf[startg_gps[ip]], numg_gps[ip], mpi_type, ip, 0, this->pool_world, &recv_requests[ip]);
         ++active_recvs;
     }
     for (int ip = 0; ip < poolnproc_gps; ++ip)
@@ -128,7 +136,7 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
         for (int is = 0; is < nst_gps; ++is)
         {
             std::complex<T> *outp = &out[is * nz_gps + startz_gps[ip]];
-            std::complex<T> *inp = &in[startg_gps[ip] + is * nzip];
+            std::complex<T> *inp = &recvbuf[startg_gps[ip] + is * nzip];
             for (int izip = 0; izip < nzip; ++izip)
             {
                 outp[izip] = inp[izip];
@@ -142,7 +150,7 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
 #endif
     for (int i = 0; i < numg_gps[poolrank_gps]; ++i)
     {
-        in[startg_gps[poolrank_gps] + i] = sendbuf[startr_gps[poolrank_gps] + i];
+        recvbuf[startg_gps[poolrank_gps] + i] = sendbuf[startr_gps[poolrank_gps] + i];
     }
     unpack_peer(poolrank_gps);
     ModuleBase::timer::end(this->classname, "gatherp_unpack");
@@ -192,7 +200,7 @@ template <typename T>
 void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
 {
     ModuleBase::timer::start(this->classname, "gathers_scatterp");
-    if(this->poolnproc == 1) //In this case nrxx=fftnx*fftny*nz, nst = nstot, 
+    if(this->poolnproc == 1) //In this case nrxx=fftnx*fftny*nz, nst = nstot,
     {
         const int nrxx_ = this->nrxx;
         const int nst_ = this->nst;
@@ -226,7 +234,7 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
 
 #ifdef __MPI
     // change (nz,ns) to (numz[ip],ns, poolnproc)
-    // Hence, we can send them at one time. 
+    // Hence, we can send them at one time.
     ModuleBase::timer::start(this->classname, "gathers_pack");
     const int poolnproc_ = this->poolnproc;
     const int nst_ = this->nst;
@@ -238,7 +246,10 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
     const int* startr_ = this->startr;
     const int poolrank_ = this->poolrank;
     const int send_count_ = startg_[poolnproc_ - 1] + this->numg[poolnproc_ - 1];
-    std::complex<T>* sendbuf = this->acquire_comm_sendbuf<T>(send_count_);
+    const int recv_count_ = startr_[poolnproc_ - 1] + this->numr[poolnproc_ - 1];
+    std::complex<T>* commbuf = this->acquire_comm_workbuf<T>(send_count_ + recv_count_);
+    std::complex<T>* sendbuf = commbuf;
+    std::complex<T>* recvbuf = commbuf + send_count_;
 #ifdef _OPENMP
     #pragma omp parallel for collapse(2)
 #endif
@@ -288,7 +299,7 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
         {
             continue;
         }
-        MPI_Irecv(&in[startr_[ip]], this->numr[ip], mpi_type, ip, 0, this->pool_world, &recv_requests[ip]);
+        MPI_Irecv(&recvbuf[startr_[ip]], this->numr[ip], mpi_type, ip, 0, this->pool_world, &recv_requests[ip]);
         ++active_recvs;
     }
     for (int ip = 0; ip < poolnproc_; ++ip)
@@ -316,10 +327,19 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
     //change (nplane,nstot) to (nplane fftnxy)
     const int nplane = this->nplane;
     const int* istot2ixy = this->istot2ixy;
+    std::vector<int> istot_offsets(poolnproc_, 0);
+    for (int ip = 1; ip < poolnproc_; ++ip)
+    {
+        istot_offsets[ip] = istot_offsets[ip - 1] + nst_per_[ip - 1];
+    }
     auto unpack_peer = [&](const int ip)
     {
-        const int istot0 = startr_[ip] / nplane;
         const int peer_nst = nst_per_[ip];
+        if (peer_nst == 0 || nplane == 0)
+        {
+            return;
+        }
+        const int istot0 = istot_offsets[ip];
 #ifdef _OPENMP
         #pragma omp parallel for
 #endif
@@ -328,7 +348,7 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
             const int istot = istot0 + is;
             const int ixy = istot2ixy[istot];
             std::complex<T> *outp = &out[ixy * nplane];
-            std::complex<T> *inp = &in[startr_[ip] + is * nplane];
+            std::complex<T> *inp = &recvbuf[startr_[ip] + is * nplane];
             for (int iz = 0; iz < nplane; ++iz)
             {
                 outp[iz] = inp[iz];
@@ -342,7 +362,7 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
 #endif
     for (int i = 0; i < this->numr[poolrank_]; ++i)
     {
-        in[startr_[poolrank_] + i] = sendbuf[startg_[poolrank_] + i];
+        recvbuf[startr_[poolrank_] + i] = sendbuf[startg_[poolrank_] + i];
     }
     unpack_peer(poolrank_);
     ModuleBase::timer::end(this->classname, "gathers_unpack");
