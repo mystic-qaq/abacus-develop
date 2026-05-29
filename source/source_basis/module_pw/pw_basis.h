@@ -23,6 +23,42 @@ namespace ModulePW
 {
 
 /**
+ * @brief Interface for deciding whether a reciprocal grid point belongs to the
+ *        plane-wave set.
+ *
+ * The distribution code depends only on this predicate, so tests can inject a
+ * mock criterion and production code can use the energy-cutoff implementation.
+ */
+class IPWCriterion
+{
+  public:
+    virtual ~IPWCriterion() = default;
+    virtual bool is_in_sphere(const ModuleBase::Vector3<double>& g) const = 0;
+};
+
+/**
+ * @brief Plane-wave criterion based on g * GGT * g <= ggecut.
+ */
+class EnergyCutoffCriterion : public IPWCriterion
+{
+  public:
+    EnergyCutoffCriterion(const double ggecut, const ModuleBase::Matrix3& GGT, const bool full_pw = false)
+        : ggecut_(ggecut), GGT_(GGT), full_pw_(full_pw)
+    {
+    }
+
+    bool is_in_sphere(const ModuleBase::Vector3<double>& g) const override
+    {
+        return full_pw_ || g * (GGT_ * g) <= ggecut_;
+    }
+
+  private:
+    double ggecut_ = 0.0;
+    ModuleBase::Matrix3 GGT_;
+    bool full_pw_ = false;
+};
+
+/**
  * @brief A class which can convert a function of "r" to the corresponding linear
  * superposition of plane waves (real space to reciprocal space)
  * or convert a linear superposition of plane waves to the function
@@ -241,7 +277,8 @@ protected:
     //Count the total number of planewaves (tot_npw) and sticks (this->nstot) (in distributeg method1 and method2)
     void count_pw_st(
         int* st_length2D, // the number of planewaves that belong to the stick located on (x, y).
-        int* st_bottom2D  // the z-coordinate of the bottom of stick on (x, y).
+        int* st_bottom2D, // the z-coordinate of the bottom of stick on (x, y).
+        const IPWCriterion* criterion = nullptr // optional injectable plane-wave cutoff predicate.
     );
 
     //get ig2isz and is2fftixy
