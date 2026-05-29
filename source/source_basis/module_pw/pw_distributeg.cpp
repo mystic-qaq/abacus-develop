@@ -2,6 +2,12 @@
 #include "source_base/tool_quit.h"
 #include "source_base/global_function.h"
 #include "source_base/timer.h"
+#include <algorithm>
+#include <limits>
+#include <vector>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 namespace ModulePW
 {
 /**
@@ -46,8 +52,7 @@ void PW_Basis::count_pw_st(
 )
 {
     ModuleBase::GlobalFunc::ZEROS(st_length2D, this->fftnxy);
-    ModuleBase::GlobalFunc::ZEROS(st_bottom2D, this->fftnxy);
-    ModuleBase::Vector3<double> f;
+    std::fill(st_bottom2D, st_bottom2D + this->fftnxy, std::numeric_limits<int>::max());
 
     // determine the scaning area along x-direct, if gamma-only && xprime, only positive axis is used.
     int ix_end = int(this->nx / 2) + 1;
@@ -89,53 +94,175 @@ void PW_Basis::count_pw_st(
     this->lix = this->rix = 0;
     this->npwtot = 0;
     this->nstot = 0;
-    for (int ix = ix_start; ix <= ix_end; ++ix)
-    {
-        for (int iy = iy_start; iy <= iy_end; ++iy)
-        {
-            // we shift all sticks to the first quadrant in x-y plane here.
-            // (ix, iy, iz) is the direct coordinates of planewaves.
-            // x and y is the coordinates of shifted sticks in x-y plane.
-            // for example, if fftny = fftnx = 10, we will shift the stick on (-1, 2) to (9, 2),
-            // so that its index in st_length and st_bottom is 9 * 10 + 2 = 92.
-            int x = ix;
-            int y = iy;
-            if (x < 0) { x += this->nx;
-}
-            if (y < 0) { y += this->ny;
-}
-            int index = x * this->fftny + y;
+    int liy_local = 0;
+    int riy_local = 0;
+    int lix_local = 0;
+    int rix_local = 0;
 
-            int length = 0; // number of planewave on stick (x, y).
-            for (int iz = iz_start; iz <= iz_end; ++iz)
+    const int fftny_ = this->fftny;
+    const int nx_ = this->nx;
+    const int ny_ = this->ny;
+    const double ggecut_ = this->ggecut;
+    const bool full_pw_ = this->full_pw;
+    const int nx_range = ix_end - ix_start + 1;
+    const int iy_range = iy_end - iy_start + 1;
+
+    struct StickRecord
+    {
+        int order;
+        int index;
+        int length;
+        int bottom;
+    };
+
+#ifdef _OPENMP
+    const int max_threads = omp_get_max_threads();
+#else
+    const int max_threads = 1;
+#endif
+    std::vector<std::vector<StickRecord>> stick_records(max_threads);
+    std::vector<int> npwtot_records(max_threads, 0);
+    std::vector<int> nstot_records(max_threads, 0);
+    std::vector<int> liy_records(max_threads, 0);
+    std::vector<int> riy_records(max_threads, 0);
+    std::vector<int> lix_records(max_threads, 0);
+    std::vector<int> rix_records(max_threads, 0);
+
+    // OpenMP parallelization: each thread handles a slice of ix and stores
+    // thread-private stick records. The records are replayed in the original
+    // serial scan order after the parallel region to keep st_length2D and
+    // st_bottom2D deterministic when different scanned sticks map to the same
+    // FFT-grid index.
+#ifdef _OPENMP
+#pragma omp parallel
+#endif
+    {
+        ModuleBase::Vector3<double> f;
+        int npwtot_priv = 0;
+        int nstot_priv = 0;
+        int liy_priv = 0;
+        int riy_priv = 0;
+        int lix_priv = 0;
+        int rix_priv = 0;
+
+#ifdef _OPENMP
+        const int tid = omp_get_thread_num();
+        const int nthreads = omp_get_num_threads();
+#else
+        const int tid = 0;
+        const int nthreads = 1;
+#endif
+        const int chunk = nx_range / nthreads;
+        const int rem = nx_range % nthreads;
+        const int ix_local_start = ix_start + tid * chunk + std::min(tid, rem);
+        const int ix_local_end = ix_local_start + chunk - 1 + (tid < rem ? 1 : 0);
+        auto& records = stick_records[tid];
+
+        for (int ix = ix_local_start; ix <= ix_local_end; ++ix)
+        {
+            for (int iy = iy_start; iy <= iy_end; ++iy)
             {
-                f.x = ix;
-                f.y = iy;
-                f.z = iz;
-                double modulus = f * (this->GGT * f);
-                if (modulus <= this->ggecut || this->full_pw)
+                // we shift all sticks to the first quadrant in x-y plane here.
+                // (ix, iy, iz) is the direct coordinates of planewaves.
+                // x and y is the coordinates of shifted sticks in x-y plane.
+                // for example, if fftny = fftnx = 10, we will shift the stick on (-1, 2) to (9, 2),
+                // so that its index in st_length and st_bottom is 9 * 10 + 2 = 92.
+                int x = ix;
+                int y = iy;
+                if (x < 0)
                 {
-                    if (length == 0) { st_bottom2D[index] = iz; // length == 0 means this point is the bottom of stick (x, y).
-}
-                    ++this->npwtot;
-                    ++length;
-                    if(iy < this->riy) { this->riy = iy;
-}
-                    if(iy > this->liy) { this->liy = iy;
-}
-                    if(ix < this->rix) { this->rix = ix;
-}
-                    if(ix > this->lix) { this->lix = ix;
-}
+                    x += nx_;
+                }
+                if (y < 0)
+                {
+                    y += ny_;
+                }
+                int index = x * fftny_ + y;
+
+                int length = 0; // number of planewave on stick (x, y).
+                int bottom = std::numeric_limits<int>::max();
+                for (int iz = iz_start; iz <= iz_end; ++iz)
+                {
+                    f.x = ix;
+                    f.y = iy;
+                    f.z = iz;
+                    double modulus = f * (this->GGT * f);
+                    if (modulus <= ggecut_ || full_pw_)
+                    {
+                        if (length == 0)
+                        {
+                            bottom = iz; // length == 0 means this point is the bottom of stick (x, y).
+                        }
+                        ++npwtot_priv;
+                        ++length;
+                        if(iy < riy_priv)
+                        {
+                            riy_priv = iy;
+                        }
+                        if(iy > liy_priv)
+                        {
+                            liy_priv = iy;
+                        }
+                        if(ix < rix_priv)
+                        {
+                            rix_priv = ix;
+                        }
+                        if(ix > lix_priv)
+                        {
+                            lix_priv = ix;
+                        }
+                    }
+                }
+                if (length > 0)
+                {
+                    records.push_back({(ix - ix_start) * iy_range + (iy - iy_start), index, length, bottom});
+                    ++nstot_priv;
                 }
             }
-            if (length > 0)
-            {
-                st_length2D[index] = length;
-                ++this->nstot;
-            }
+        }
+        npwtot_records[tid] = npwtot_priv;
+        nstot_records[tid] = nstot_priv;
+        riy_records[tid] = riy_priv;
+        liy_records[tid] = liy_priv;
+        rix_records[tid] = rix_priv;
+        lix_records[tid] = lix_priv;
+    }
+
+    std::vector<StickRecord> ordered_records;
+    for (int tid = 0; tid < max_threads; ++tid)
+    {
+        this->npwtot += npwtot_records[tid];
+        this->nstot += nstot_records[tid];
+        riy_local = std::min(riy_local, riy_records[tid]);
+        liy_local = std::max(liy_local, liy_records[tid]);
+        rix_local = std::min(rix_local, rix_records[tid]);
+        lix_local = std::max(lix_local, lix_records[tid]);
+    }
+    ordered_records.reserve(this->nstot);
+    for (int tid = 0; tid < max_threads; ++tid)
+    {
+        ordered_records.insert(ordered_records.end(), stick_records[tid].begin(), stick_records[tid].end());
+    }
+    std::sort(ordered_records.begin(), ordered_records.end(), [](const StickRecord& a, const StickRecord& b) {
+        return a.order < b.order;
+    });
+    for (const StickRecord& stick : ordered_records)
+    {
+        st_length2D[stick.index] = stick.length;
+        st_bottom2D[stick.index] = stick.bottom;
+    }
+
+    for (int ixy = 0; ixy < this->fftnxy; ++ixy)
+    {
+        if (st_length2D[ixy] == 0)
+        {
+            st_bottom2D[ixy] = 0;
         }
     }
+    this->riy = riy_local;
+    this->liy = liy_local;
+    this->rix = rix_local;
+    this->lix = lix_local;
     riy += this->ny;
     rix += this->nx;
     return;
