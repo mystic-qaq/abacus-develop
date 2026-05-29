@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import re
+import statistics
 from pathlib import Path
 
 
@@ -35,59 +36,86 @@ def manifest_rows(suite_dir: Path, kind: str) -> list[dict[str, str]]:
     return read_csv(suite_dir / "meta" / f"{kind}_manifest.csv")
 
 
-def base_label(scale: str, kind: str) -> str:
-    suffix = f"_{kind}_scf"
-    if suffix in scale:
-        return scale.split(suffix, 1)[0]
-    return scale
+def performance_label_map(suite_dir: Path) -> dict[str, str]:
+    rows = manifest_rows(suite_dir, "performance")
+    return {Path(row["case_dir"]).name: row["label"] for row in rows}
 
 
-def wall_table(summary_rows: list[dict[str, str]], kind: str) -> list[dict[str, object]]:
-    by_key: dict[tuple[str, str, str], dict[str, str]] = {}
-    for row in summary_rows:
-        if row["class_name"] == "PW_Basis_K":
-            by_key[(row["scale"], row["nproc"], row["omp"])] = row
+def mean(values: list[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def stdev(values: list[float]) -> float:
+    return statistics.stdev(values) if len(values) > 1 else 0.0
+
+
+def wall_table(run_rows: list[dict[str, str]], label_map: dict[str, str]) -> list[dict[str, object]]:
+    grouped: dict[tuple[str, str, str], list[float]] = {}
+    for row in run_rows:
+        if row["class_name"] != "PW_Basis_K":
+            continue
+        label = label_map.get(row["case"], row["case"])
+        grouped.setdefault((label, row["nproc"], row["omp"]), []).append(float(row["wall_s"]))
 
     baseline: dict[str, float] = {}
-    for (scale, nproc, omp), row in by_key.items():
+    for (label, nproc, omp), values in grouped.items():
         if nproc == "1" and omp == "1":
-            baseline[scale] = float(row["wall_s_mean"])
+            baseline[label] = mean(values)
 
     out: list[dict[str, object]] = []
-    for (scale, nproc, omp), row in sorted(by_key.items()):
-        wall = float(row["wall_s_mean"])
-        stdev = float(row["wall_s_stdev"])
-        base = baseline.get(scale, wall)
+    for (label, nproc, omp), rows in sorted(grouped.items()):
+        wall = mean(rows)
+        sigma = stdev(rows)
+        base = baseline.get(label, wall)
         out.append(
             {
-                "label": base_label(scale, kind),
+                "case": label,
+                "config": f"{nproc}x{omp}",
                 "nproc": int(nproc),
                 "omp": int(omp),
                 "wall_s_mean": wall,
-                "wall_s_stdev": stdev,
-                "wall_cv_percent": (stdev / wall * 100.0) if wall else 0.0,
+                "wall_s_stdev": sigma,
+                "wall_cv_percent": (sigma / wall * 100.0) if wall else 0.0,
                 "speedup_vs_1x1": (base / wall) if wall else 0.0,
             }
         )
     return out
 
 
-def combined_comm_table(summary_rows: list[dict[str, str]], kind: str) -> list[dict[str, object]]:
-    grouped: dict[tuple[str, str, str], list[dict[str, str]]] = {}
-    for row in summary_rows:
-        grouped.setdefault((row["scale"], row["nproc"], row["omp"]), []).append(row)
+def combined_comm_table(run_rows: list[dict[str, str]], label_map: dict[str, str]) -> list[dict[str, object]]:
+    per_run: dict[tuple[str, str, str, str], list[dict[str, str]]] = {}
+    for row in run_rows:
+        label = label_map.get(row["case"], row["case"])
+        key = (label, row["case"], row["nproc"], row["omp"])
+        per_run.setdefault(key, []).append(row)
+
+    grouped: dict[tuple[str, str, str], list[dict[str, float]]] = {}
+    for (label, case_name, nproc, omp), rows in per_run.items():
+        wall = float(rows[0]["wall_s"])
+        comm = sum(float(row["comm_critical_s"]) for row in rows)
+        wait = sum(float(row["wait_proxy_max_s"]) for row in rows)
+        overlap = sum(float(row["overlap_candidate_rank_avg_s"]) for row in rows)
+        grouped.setdefault((label, nproc, omp), []).append(
+            {
+                "wall_s": wall,
+                "comm_critical_sum_s": comm,
+                "wait_proxy_sum_s": wait,
+                "overlap_candidate_sum_s": overlap,
+            }
+        )
 
     out: list[dict[str, object]] = []
-    for (scale, nproc, omp), rows in sorted(grouped.items()):
+    for (label, nproc, omp), rows in sorted(grouped.items()):
         if nproc == "1" and omp == "1":
             continue
-        wall = float(rows[0]["wall_s_mean"])
-        comm = sum(float(row["comm_critical_s_mean"]) for row in rows)
-        wait = sum(float(row["wait_proxy_max_s_mean"]) for row in rows)
-        overlap = sum(float(row["overlap_candidate_rank_avg_s_mean"]) for row in rows)
+        wall = mean([row["wall_s"] for row in rows])
+        comm = mean([row["comm_critical_sum_s"] for row in rows])
+        wait = mean([row["wait_proxy_sum_s"] for row in rows])
+        overlap = mean([row["overlap_candidate_sum_s"] for row in rows])
         out.append(
             {
-                "label": base_label(scale, kind),
+                "case": label,
+                "config": f"{nproc}x{omp}",
                 "nproc": int(nproc),
                 "omp": int(omp),
                 "wall_s_mean": wall,
@@ -148,7 +176,8 @@ def correctness_table(rows: list[dict[str, str]]) -> list[dict[str, object]]:
         ref = reference_energy(base_case)
         out.append(
             {
-                "label": row["label"],
+                "case": row["label"],
+                "config": f'{row["nproc"]}x{row["omp"]}',
                 "nproc": int(row["nproc"]),
                 "omp": int(row["omp"]),
                 "scf_nmax": int(row["scf_nmax"]),
@@ -208,7 +237,7 @@ def write_report(
     lines.extend(
         markdown_table(
             perf_wall,
-            ["label", "nproc", "omp", "wall_s_mean", "wall_s_stdev", "wall_cv_percent", "speedup_vs_1x1"],
+            ["case", "config", "wall_s_mean", "wall_s_stdev", "wall_cv_percent", "speedup_vs_1x1"],
             {
                 "wall_s_mean": ".3f",
                 "wall_s_stdev": ".3f",
@@ -222,9 +251,8 @@ def write_report(
         markdown_table(
             top_comm,
             [
-                "label",
-                "nproc",
-                "omp",
+                "case",
+                "config",
                 "comm_critical_sum_s",
                 "comm_fraction_percent",
                 "wait_proxy_sum_s",
@@ -243,9 +271,8 @@ def write_report(
         markdown_table(
             correctness,
             [
-                "label",
-                "nproc",
-                "omp",
+                "case",
+                "config",
                 "status",
                 "wall_s",
                 "final_etot_ev",
@@ -280,10 +307,11 @@ def main() -> None:
     parser.add_argument("--suite-dir", type=Path, required=True)
     args = parser.parse_args()
     suite_dir = args.suite_dir.expanduser().resolve()
+    label_map = performance_label_map(suite_dir)
 
-    perf_summary = read_csv(suite_dir / "tables" / "performance" / "pw_comm_benchmark_summary.csv")
-    perf_wall = wall_table(perf_summary, "performance")
-    perf_comm = combined_comm_table(perf_summary, "performance")
+    perf_runs = read_csv(suite_dir / "tables" / "performance" / "pw_comm_run_summary.csv")
+    perf_wall = wall_table(perf_runs, label_map)
+    perf_comm = combined_comm_table(perf_runs, label_map)
     correctness = correctness_table(manifest_rows(suite_dir, "correctness"))
 
     write_csv(suite_dir / "tables" / "performance_wall_summary.csv", perf_wall)

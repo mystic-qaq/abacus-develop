@@ -221,3 +221,86 @@ out[ixy * nplane + iz] = in[istot * nplane + iz]
 4. 将通信替换为 `MPI_Irecv` / `MPI_Isend` + `MPI_Waitsome`，对已完成 peer 立即 unpack，最后 `MPI_Waitall` 确认发送完成。
 5. 对 `poolnproc == 1`、`float/double`、`gamma_only`、普通 complex FFT、`PW_Basis`、`PW_Basis_K` 分别做正确性回归。
 6. 在基础非阻塞版本稳定后，再评估 stick-block 双缓冲与 z-FFT 子区间接口，作为进一步的通信与计算重叠方案。
+
+## 4. 已实现的第一阶段版本（2026-05-27）
+
+当前 `WorkflowB` 分支已经把 CPU/MPI 路径中的第一阶段改造落到 `source/source_basis/module_pw/pw_gatherscatter.h`，实现边界与计划保持一致：
+
+- 不改 `PW_Basis` / `PW_Basis_K` / `PW_Basis_Sup` 的公开 FFT 接口；
+- 不改 `ig2isz` / `igl2isz_k` 数值布局；
+- 不引入运行时开关；
+- `poolnproc == 1` 快路径保持原样；
+- GPU / DSP 路径不在本阶段范围内。
+
+### 4.1 实现入口与 workspace
+
+`PW_Basis` 现在新增了仅供内部实现使用的可复用发送暂存区：
+
+```cpp
+mutable std::vector<std::complex<float>> comm_sendbuf_float_;
+mutable std::vector<std::complex<double>> comm_sendbuf_double_;
+```
+
+并通过 `acquire_comm_sendbuf<T>(size)` 惰性扩容。这样做的目的有两个：
+
+1. 把“发送数据生命周期”从最终输出缓冲区中剥离出来，允许通信未结束时继续写最终输出；
+2. 避免每次 gather/scatter 都临时 `new[]` / `delete[]`。
+
+目前没有单独的持久 `recvbuf`。第一阶段仍复用原有 `in` 作为接收缓冲区，这与原阻塞实现的内存语义一致。
+
+### 4.2 `gatherp_scatters` 的 request 生命周期
+
+当前实现顺序如下：
+
+1. 先把本地 plane-major 数据 pack 到独立 `sendbuf`，布局仍是 `(nstot, nplane)`。
+2. 对所有 `numg[ip] > 0` 且 `ip != poolrank` 的 peer 先发 `MPI_Irecv(&in[startg[ip]], ...)`。
+3. 再对所有 `numr[ip] > 0` 且 `ip != poolrank` 的 peer 发 `MPI_Isend(&sendbuf[startr[ip]], ...)`。
+4. self peer 不走 MPI，请求保持 `MPI_REQUEST_NULL`。
+5. 进入 `MPI_Waitsome` 循环：哪个 peer 的接收先完成，就立刻把 `in[startg[ip] ...]` unpack 到最终 `out[is * nz + startz[ip] ...]`。
+6. 全部接收完成后，再用一次 `MPI_Waitall` 等待剩余 send request 结束。
+
+这里的关键点是：接收和 unpack 已经按 peer 粒度流水化，但 `fftzfor` 仍然要等函数整体返回后才能开始，因此第一阶段重叠只发生在通信内核内部。
+
+### 4.3 `gathers_scatterp` 的 request 生命周期
+
+反向路径采用同样的模式：
+
+1. 先把 stick-major 输入 pack 到独立 `sendbuf`，布局仍是按 peer 聚合的 `(numz[ip], nst)`。
+2. 对所有 `numr[ip] > 0` 且 `ip != poolrank` 的 peer 发 `MPI_Irecv(&in[startr[ip]], ...)`。
+3. 对所有 `numg[ip] > 0` 且 `ip != poolrank` 的 peer 发 `MPI_Isend(&sendbuf[startg[ip]], ...)`。
+4. 因为发送已经完全脱离最终输出 `out`，此时可以立即执行 `gathers_clear`，把 plane-major 输出区清零。
+5. self peer 直接把 `sendbuf[startg[self] ...]` 拷回 `in[startr[self] ...]`，然后立即 unpack。
+6. 后续 peer 在 `MPI_Waitsome` 中一旦完成，就按 `istot0 = startr[ip] / nplane` 计算该 peer 的全局 stick 区间，并直接 unpack 到最终 plane-major `out`。
+7. 全部接收结束后，再 `MPI_Waitall` 等剩余发送完成。
+
+因此，第一阶段的反向路径已经把“clear + 部分 unpack”与剩余 MPI 等待交织起来，但还没有进入更细的 stick-block/z-FFT 流水线。
+
+### 4.4 self peer 与零长度 peer 的处理
+
+当前版本显式区分三种 peer：
+
+- `ip == poolrank`：不发 MPI request，只做本地内存拷贝，然后立即 unpack；
+- `count == 0`：既不发 `Irecv` 也不发 `Isend`，对应 request 保持 `MPI_REQUEST_NULL`；
+- 普通非零 peer：进入 `Irecv/Isend/Waitsome/Waitall` 生命周期。
+
+这样做的直接收益是避免空消息、避免对 self peer 的不必要 MPI 调用，也让 `Waitsome` 的边界更稳定。
+
+### 4.5 timer 语义
+
+为了兼容现有 benchmark 解析脚本，timer 名称保持不变，但语义已经收紧为：
+
+- `gatherp_pack` / `gathers_pack`：仅统计本地 pack；
+- `gatherp_unpack` / `gathers_unpack`：仅统计本地 unpack；
+- `gathers_clear`：仅统计最终 plane-major 输出清零；
+- `gatherp_alltoallv` / `gathers_alltoallv`：只统计 MPI request post、`MPI_Waitsome` 和 `MPI_Waitall` 中的 MPI 等待时间，不再把 unpack/clear 混进去。
+
+这意味着新的 `*_alltoallv` timer 仍可被旧脚本识别，但更接近“通信临界路径”本身。
+
+### 4.6 CPU/MPI 适用边界
+
+当前实现只对 `pw_transform.cpp` / `pw_transform_k.cpp` 的 CPU/MPI gather/scatter 内核生效：
+
+- `PW_Basis` complex 路径和 gamma 路径都走同一套非阻塞通信内核；
+- `PW_Basis_K` 通过既有调用链自动继承；
+- `PW_Basis_Sup` 也继承同一通信实现，但本阶段的新增定向 roundtrip 单测只把 `PW_Basis` 作为“任意 plane-major 数据”的稳定不变量检查，`PW_Basis_Sup` 仍通过既有 `test_sup` 并行回归覆盖其分布与调用路径；
+- GPU / DSP / 跨节点网络行为仍需单独评估，当前文档和基准结论仅对应单节点 CPU + OpenMPI。
