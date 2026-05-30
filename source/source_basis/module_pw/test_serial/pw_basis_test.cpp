@@ -362,3 +362,57 @@ TEST_F(PWBasisTEST,CollectUniqgg)
 	pwb.collect_uniqgg();
 	EXPECT_EQ(pwb.ngg,78);
 }
+
+TEST_F(PWBasisTEST,CacheInvalidation)
+{
+	double lat0 = 1.8897261254578281;
+	ModuleBase::Matrix3 latvec(10.0,0.0,0.0,
+				0.0,10.0,0.0,
+				0.0,0.0,10.0);
+	pwb.initgrids(lat0,latvec,10.0);
+	pwb.initparameters(true,11.0,2,true);
+	ASSERT_NO_THROW(pwb.setuptransform());
+
+	pwb.reset_cache_stats();
+	pwb.collect_local_pw();
+	pwb.collect_uniqgg();
+	pwb.collect_local_pw();
+	pwb.collect_uniqgg();
+	auto stats_after_hit = pwb.get_cache_stats();
+	EXPECT_EQ(stats_after_hit.local_pw_hits,1);
+	EXPECT_EQ(stats_after_hit.local_pw_misses,1);
+	EXPECT_EQ(stats_after_hit.uniqgg_hits,1);
+	EXPECT_EQ(stats_after_hit.uniqgg_misses,1);
+
+	pwb.initparameters(false,9.0,1,false);
+	ASSERT_NO_THROW(pwb.setuptransform());
+	pwb.collect_local_pw();
+	pwb.collect_uniqgg();
+	auto stats_after_param_change = pwb.get_cache_stats();
+	EXPECT_EQ(stats_after_param_change.local_pw_misses,2);
+	EXPECT_EQ(stats_after_param_change.uniqgg_misses,2);
+
+	pwb.set_precision("single");
+	pwb.collect_local_pw();
+	pwb.collect_uniqgg();
+	auto stats_after_precision_change = pwb.get_cache_stats();
+	EXPECT_EQ(stats_after_precision_change.local_pw_misses,3);
+	EXPECT_EQ(stats_after_precision_change.uniqgg_misses,3);
+
+	pwb.set_device("cpu-cache-test");
+	pwb.collect_local_pw();
+	pwb.collect_uniqgg();
+	auto stats_after_device_change = pwb.get_cache_stats();
+	EXPECT_EQ(stats_after_device_change.local_pw_misses,4);
+	EXPECT_EQ(stats_after_device_change.uniqgg_misses,4);
+
+	pwb.initgrids(lat0,latvec,18,16,14);
+	pwb.initparameters(true,8.0,2,true);
+	ASSERT_NO_THROW(pwb.setuptransform());
+	pwb.collect_local_pw();
+	pwb.collect_uniqgg();
+	auto stats_after_grid_change = pwb.get_cache_stats();
+	EXPECT_EQ(stats_after_grid_change.local_pw_misses,5);
+	EXPECT_EQ(stats_after_grid_change.uniqgg_misses,5);
+	EXPECT_GT(stats_after_grid_change.cache_bytes,0);
+}

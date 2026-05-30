@@ -204,3 +204,43 @@ TEST_F(PWTEST, DISABLED_transform_omp_speedup_report)
                   << " efficiency=" << efficiency << std::endl;
     }
 }
+
+TEST_F(PWTEST, transform_omp_small_tail_lengths_consistency)
+{
+    std::cout << "FFT transform OpenMP consistency test for small odd grids and cache-block tails" << std::endl;
+    ModulePW::PW_Basis pwtest(device_flag, precision_flag);
+    init_pw_basis(pwtest, true);
+
+    ModuleBase::Matrix3 latvec(1.0, 0.15, 0.0, 0.0, 1.0, 0.1, 0.05, 0.0, 1.0);
+    pwtest.initgrids(6.0, latvec, 9, 7, 5);
+    pwtest.initparameters(true, 10.0, 1, true);
+    pwtest.setuptransform();
+
+    ASSERT_LT(pwtest.nrxx, 1024);
+    ASSERT_GT(pwtest.npw, 0);
+
+    std::vector<double> real_in(pwtest.nrxx);
+    for (int i = 0; i < pwtest.nrxx; ++i)
+    {
+        real_in[i] = deterministic_real_value<double>(i + 17);
+    }
+
+    std::vector<std::complex<double>> recip_ref(pwtest.npw);
+    std::vector<double> real_ref(pwtest.nrxx);
+
+    set_omp_threads(1);
+    pwtest.real2recip(real_in.data(), recip_ref.data());
+    pwtest.recip2real(recip_ref.data(), real_ref.data());
+
+    for (const int nthread : thread_counts_to_check())
+    {
+        set_omp_threads(nthread);
+        std::vector<std::complex<double>> recip_val(pwtest.npw);
+        std::vector<double> real_val(pwtest.nrxx);
+        pwtest.real2recip(real_in.data(), recip_val.data());
+        pwtest.recip2real(recip_val.data(), real_val.data());
+
+        expect_complex_vectors_near(recip_ref, recip_val, 1.0e-10);
+        expect_real_vectors_near(real_ref, real_val, 1.0e-10);
+    }
+}

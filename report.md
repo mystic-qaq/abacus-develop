@@ -536,14 +536,16 @@ void PW_Basis::count_pw_st(
 
 - **OpenMP 线程数一致性**：在 1, 2, max 线程下运行 `real2recip`/`recip2real`，验证数值结果与串行一致
 - **Gamma-only 路径覆盖**：测试 r2c/c2r 路径 + add/non-add 模式
+- **边界长度补充验证**：进一步补充小尺寸奇数网格 (`9×7×5`) 与 cache-block 尾块长度场景，验证 SIMD/缓存分块改写后 `real2recip`/`recip2real` 在不同线程数下结果一致，并间接覆盖 `pw_gatherscatter.h` 相关拷贝路径
 - **性能基准辅助**：`DISABLED_transform_omp_speedup_report` 用于手动测量加速比
 
 ### 7.2 已有测试的补充验证
 
 | 测试文件 | 新增验证 |
 |---------|---------|
-| `test1-1-1.cpp` | 缓存命中后指针不变、数据不变；CacheStats 正确计数 |
-| `pw_basis_k_test.cpp` | gcar/gk2 缓存命中/未命中统计；erf 参数变化触发 gk2 重算 |
+| `test1-1-1.cpp` | 缓存命中后 `gg`/`ig2igg`/`gg_uniq` 指针保持稳定，样本数据不变；`CacheStats` 的 hit/miss 计数符合预期 |
+| `pw_basis_test.cpp` | 补充 `PW_Basis` 缓存失效路径验证：`initparameters`、`initgrids`、`set_device`、`set_precision` 变化后应重新触发 cache miss，`collect_local_pw()` 与 `collect_uniqgg()` 统计同步更新 |
+| `pw_basis_k_test.cpp` | 在原有 gcar/gk2 缓存统计验证基础上，进一步补充 K 点参数变化导致的整体失效，以及 `erf` 参数变化仅触发 `gk2` 重算、`gcar` 保持命中的部分命中行为 |
 
 ### 7.3 测试通过情况
 
@@ -640,6 +642,12 @@ OpenMPI 4.0.3, g++-9, 3 次重复, 每节点固定 3 核心:
 - 所有数值优化（SIMD、分块、缓存）产生与上游**位级一致**的结果
 - `count_pw_st` 的 OpenMP 并行化通过归并排序保证确定性——任何线程数下的输出与串行逐元素相等
 
+### 10.3 补充回归验证
+
+在上述基线验证之外，原有测试基础上进一步补充了针对 `feat/SIMD` 和 `feat/cache-reuse` 的边界回归。新增测试重点检查了 SIMD/缓存分块改写后的边界长度正确性、`real2recip`/`recip2real` 在不同线程数下的一致性、cache hit/miss 统计与缓存失效路径，以及 `PW_Basis_K` 中 `gcar/gk2` 缓存的部分命中与重新计算行为，用于防止性能优化在小数组、参数更新、网格变化或线程调度变化时引入隐蔽正确性问题。
+
+从当前可见的补充验证输出看，相关新增测试已通过，包括 `MODULE_PW_basis_pw_serial` 中的 `PWBasisTEST.CacheInvalidation`、`MODULE_PW_basis_pw_k_serial` 中的 `PWBasisKTEST.CacheInvalidationByKParameters`，以及 `MODULE_PW_pw_test` 中的 `PWTEST.transform_omp_small_tail_lengths_consistency`、`PWTEST.transform_omp_threads_complex_roundtrip_consistency`、`PWTEST.transform_omp_threads_real_gamma_and_add_consistency` 与 `PWTEST.test_comm_roundtrip_pw_basis` 等定向用例。
+
 ---
 
 ## 11. 优化合理性总评
@@ -713,9 +721,10 @@ OpenMPI 4.0.3, g++-9, 3 次重复, 每节点固定 3 核心:
 | `source/source_basis/module_pw/pw_init.cpp` | initmpi/initgrids/initparameters/setfullpw 缓存失效钩子 |
 | `source/source_basis/module_pw/test/test_count_pw_st.cpp` | **[新]** count_pw_st 正确性与并行一致性测试 |
 | `source/source_basis/module_pw/test/test_comm_roundtrip.cpp` | **[新]** MPI gather/scatter 往返正确性测试 |
-| `source/source_basis/module_pw/test/test_transform_omp.cpp` | **[新]** FFT 变换 OpenMP 线程数与加速比测试 |
-| `source/source_basis/module_pw/test/test1-1-1.cpp` | 缓存命中/未命中统计验证 |
-| `source/source_basis/module_pw/test_serial/pw_basis_k_test.cpp` | K 点缓存统计验证 |
+| `source/source_basis/module_pw/test/test_transform_omp.cpp` | **[新]** FFT 变换 OpenMP 线程数一致性测试；补充小尺寸奇数网格与尾块边界验证 |
+| `source/source_basis/module_pw/test/test1-1-1.cpp` | 补充缓存命中/未命中统计、指针稳定性与数据不变性验证 |
+| `source/source_basis/module_pw/test_serial/pw_basis_test.cpp` | 补充 `PW_Basis` 缓存失效路径验证 |
+| `source/source_basis/module_pw/test_serial/pw_basis_k_test.cpp` | 补充 K 点缓存统计、K 点参数失效与 `erf` 触发的部分重算验证 |
 
 ## 附录 B：性能基准复现命令
 
