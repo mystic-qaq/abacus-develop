@@ -1,0 +1,99 @@
+                                                                                     
+                              ABACUS v3.11.0-beta.2
+
+               Atomic-orbital Based Ab-initio Computation at UStc                    
+
+                     Website: http://abacus.ustc.edu.cn/                             
+               Documentation: https://abacus.deepmodeling.com/                       
+                  Repository: https://github.com/abacusmodeling/abacus-develop       
+                              https://github.com/deepmodeling/abacus-develop         
+                      Commit: 23947d864 (Fri May 15 19:02:20 2026 +0800)
+
+ Sat May 23 21:39:33 2026
+ MAKE THE DIR         : OUT.autotest/
+ RUNNING WITH DEVICE  : CPU / Intel(R) Core(TM) i7-14650HX (x1)
+ WARNING: some of potential function is set to zero cause of less than 1e-30.
+ UNIFORM GRID DIM     : 36 * 36 * 36
+ UNIFORM GRID DIM(BIG): 36 * 36 * 36
+ DONE(0.900393   SEC) : SYMMETRY
+ DONE(0.901183   SEC) : SETUP UNITCELL
+ DONE(0.995952   SEC) : INIT K-POINTS
+ ----------------------------------------------------------------
+ Self-consistent calculations for electrons
+ ----------------------------------------------------------------
+ SPIN    KPOINTS         PROCESSES   THREADS/PROC  THREADS/TOTAL 
+ 1       3               4           1             4             
+ ----------------------------------------------------------------
+ Use plane wave basis
+ ----------------------------------------------------------------
+ ELEMENT NATOM       
+ Si      2           
+ ----------------------------------------------------------------
+ Initial plane wave basis and FFT box
+ ----------------------------------------------------------------
+ DONE(1.13027    SEC) : INIT PLANEWAVE
+ START CHARGE         : ATOMIC
+ DONE(1.17361    SEC) : LOCAL POTENTIAL
+ DONE(1.19951    SEC) : NON-LOCAL POTENTIAL
+ MEMORY FOR PSI (MB)  : 0.190247
+ DONE(1.22186    SEC) : INIT BASIS
+
+ ================================================================
+ SELF-CONSISTENT: 
+ ================================================================
+ DONE(1.25587    SEC) : INIT SCF
+ ITER       ETOT/eV          EDIFF/eV         DRHO     TIME/s
+ CG1     -2.12980305e+02   0.00000000e+00   1.1856e-01   0.04
+ CG2     -2.13076164e+02  -9.58586936e-02   3.7452e-03   0.02
+ CG3     -2.13082028e+02  -5.86397297e-03   4.3413e-05   0.03
+ CG4     -2.13082361e+02  -3.33752088e-04   1.9864e-06   0.02
+ CG5     -2.13082366e+02  -4.13096759e-06   7.9519e-08   0.02
+ CG6     -2.13082366e+02  -2.02176798e-07   1.5407e-10   0.02
+ CG7     -2.13082366e+02  -2.24559895e-09   7.4106e-12   0.02
+ CG8     -2.13082366e+02  -3.16608329e-11   1.9257e-13   0.02
+ CG9     -2.13082366e+02  -3.89114053e-12   1.0836e-14   0.02
+ CG10    -2.21324528e+02  -8.24216195e+00   1.0530e-01   0.07
+ CG11    -2.20739036e+02   5.85492044e-01   1.9449e-02   0.07
+ CG12    -2.13082366e+02   7.65666990e+00   6.7236e-16   0.04
+ CG13    -2.26954966e+02  -1.38726007e+01   7.0766e-02   0.11
+ CG14    -2.21414309e+02   5.54065733e+00   3.1970e-02   0.14
+ CG15    -2.27380006e+02  -5.96569650e+00   1.8854e-01   0.12
+ CG16    -2.18972297e+02   8.40770850e+00   3.1268e-02   0.09
+ CG17    -2.31223984e+02  -1.22516870e+01   7.1312e-02   0.12
+ CG18    -2.18125494e+02   1.30984903e+01   1.4837e-02   0.13
+ CG19    -2.29213477e+02  -1.10879832e+01   1.2981e-01   0.14
+ CG20    -2.50607789e+02  -2.13943115e+01   1.0311e-02   0.44
+ !!SCF IS NOT CONVERGED!!
+
+ TIME STATISTICS
+-----------------------------------------------------------------
+   CLASS_NAME          NAME        TIME/s  CALLS   AVG/s  PER/%  
+-----------------------------------------------------------------
+                 total             3.41   17       0.20   100.00 
+ Driver          atomic_world      3.41   1        3.41   100.00 
+ Driver          reading           0.49   1        0.49   14.39  
+ Symmetry        analy_sys         0.17   1        0.17   4.90   
+ Charge          atomic_rho        0.05   2        0.03   1.53   
+ Relax_Driver    relax_driver      2.18   1        2.18   64.10  
+ ESolver_KS      runner            2.18   1        2.18   63.94  
+ Symmetry_rho    begin             0.04   21       0.00   1.07   
+ Operator        hPsi              1.10   3644     0.00   32.28  
+ Operator        veff_pw           1.07   3644     0.00   31.55  
+ PW_Basis_K      recip2real        0.56   4088     0.00   16.48  
+ PW_Basis_K      real2recip        0.51   3848     0.00   14.99  
+ ESolver_KS_PW   hamilt2rho_single 1.34   20       0.07   39.47  
+ HSolverPW       solve             1.31   20       0.07   38.48  
+ HSolverPW       solve_psik        1.18   40       0.03   34.56  
+ DiagoCG         diag_once         1.11   40       0.03   32.44  
+ ElecStatePW     psiToRho          0.04   20       0.00   1.11   
+ DiagoIterAssist diag_subspace     0.07   38       0.00   2.09   
+ ModuleIO        write_rhog        0.31   1        0.31   9.08   
+ ESolver_KS_PW   after_scf         0.08   1        0.08   2.41   
+ ModuleIO        write_eig_file    0.05   1        0.05   1.42   
+-----------------------------------------------------------------
+
+
+ START  Time  : Sat May 23 21:39:33 2026
+ FINISH Time  : Sat May 23 21:39:36 2026
+ TOTAL  Time  : 3
+ SEE INFORMATION IN : OUT.autotest/
