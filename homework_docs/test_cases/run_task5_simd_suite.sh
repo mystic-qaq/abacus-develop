@@ -9,15 +9,17 @@ DEFAULT_REPO_DIR=$(cd "$SCRIPT_DIR/../.." && pwd)
 # These cases are chosen from existing test_cases inputs:
 # - gaas_small: moderate runtime, stable, includes PW/FFT work
 # - gaas_medium: stronger gather/scatter/FFT pressure while still controllable
+# - gaas_large: larger FFT grid for clearer gather/scatter pressure on the server
 CASES=(
     "homework_docs/test_cases/gaas_small"
     "homework_docs/test_cases/gaas_medium"
+    "homework_docs/test_cases/gaas_large"
 )
 
 NPROCS=(1 2 4)
 THREADS=(1 2 4)
 WARMUP=1
-REPEAT=3
+REPEAT=5
 TIMEOUT=1800
 CONTINUE_ON_ERROR=1
 

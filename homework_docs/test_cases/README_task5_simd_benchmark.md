@@ -33,6 +33,7 @@
 - Cases
   - `homework_docs/test_cases/gaas_small`
   - `homework_docs/test_cases/gaas_medium`
+  - `homework_docs/test_cases/gaas_large`
 - MPI 进程数
   - `1 2 4`
 - OpenMP 线程数
@@ -48,6 +49,7 @@
 
 - `gaas_small` 比 `gaas_tiny` 更容易稳定观察到平面波 FFT / gather-scatter 开销，同时总运行时间仍然可控。
 - `gaas_medium` 比 `gaas_small` 更能放大 gather/scatter 重排的影响，但又比再继续增大规模更适合作为整套矩阵的常规测试。
+- `gaas_large` 在保持同一 GaAs 体系和相同物理参数的前提下，把 FFT 网格增大到 `64 x 64 x 64`，更适合作为题目 5 的高负载补充样例。
 - `gaas_tiny` 太轻，不适合作为 SIMD 性能结论的主样例。
 - `gaas_tiny_40Ry` 当前目录下输入与 `gaas_tiny` 没有形成更有代表性的额外负载，因此没有默认纳入 suite。
 
@@ -80,7 +82,7 @@ cmake -S . -B build \
   -DENABLE_MPI=ON \
   -DUSE_OPENMP=ON \
   -DENABLE_NATIVE_OPTIMIZATION=OFF
-cmake --build build -j
+cmake --build build -j4
 ```
 
 如果实体机上没有装好 ELPA，通常这套配置也可以直接工作；如果你遇到 CMake 依赖检查失败，再补充：
@@ -129,7 +131,7 @@ cmake -S . -B build \
   -DENABLE_MPI=ON \
   -DUSE_OPENMP=ON \
   -DENABLE_NATIVE_OPTIMIZATION=OFF
-cmake --build build -j
+cmake --build build -j4
 ```
 
 3. 运行同一份 suite 脚本，唯一关键区别是 `--label simd`，以及输出目录改成另一处。
