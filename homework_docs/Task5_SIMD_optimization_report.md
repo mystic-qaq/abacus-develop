@@ -192,231 +192,57 @@ ModuleBase::WARNING_QUIT("PW_Basis::gathers_scatterp", "Unsupported data type fo
 | --- | --- | --- | --- |
 | `source/source_basis/module_pw/pw_gatherscatter.h` | gather/scatter 重排循环优化 | 是 | 局部变量缓存、`reinterpret_cast` 到 `T*`、`__restrict__`、`#pragma GCC ivdep`、内层循环改为 `2*n` 标量拷贝 |
 | `source/source_basis/module_pw/pw_transform.cpp` | 相关调用路径整理 | 否，属于辅助相关 | `real2recip/recip2real` 路径中加入局部变量缓存，但未改变 gather/scatter 核心实现 |
-| `homework_docs/test_cases/run_task5_simd_benchmark.sh` | 单 benchmark 运行脚本 | 是 | 控制单 case、单 `nproc`、单 `threads` 的 warmup/repeat 执行与日志汇总 |
-| `homework_docs/test_cases/run_task5_simd_suite.sh` | suite 调度脚本 | 是 | 固定 `gaas_small/medium/large × nproc{1,2,4} × omp{1,2,4}` 测试矩阵 |
-| `homework_docs/test_cases/collect_task5_simd_results.py` | 单 benchmark 汇总 | 是 | 解析 `TOTAL Time` 与 `TIME STATISTICS`，输出 `summary_results.csv` |
-| `homework_docs/test_cases/collect_task5_simd_suite_results.py` | suite 级汇总与合并 | 是 | 合并 baseline/simd 结果，并按 `baseline_median/current_median` 计算加速比 |
 | `homework_docs/test_cases/gaas_large/*` | 新增测试样例 | 是 | 为 suite 引入更大规模样例，用于增强 FFT / gather-scatter 压力 |
 
-## 4. 测试脚本与测试样例分析
+## 4. 测试口径与结果有效性
 
-## 4.1 `run_task5_simd_suite.sh`
+### 4.1 实际使用的测试配置
 
-该脚本在开头固定了整套题目 5 的 suite 配置：
-
-- case：
-  - `homework_docs/test_cases/gaas_small`
-  - `homework_docs/test_cases/gaas_medium`
-  - `homework_docs/test_cases/gaas_large`
-- `NPROCS=(1 2 4)`
-- `THREADS=(1 2 4)`
-- `WARMUP=1`
-- `REPEAT=3`
-- `TIMEOUT=1800`
-- `CONTINUE_ON_ERROR=1`
-
-脚本行为为：
-
-1. 枚举所有 `case × nproc × threads`
-2. 对每个组合调用 `run_task5_simd_benchmark.sh`
-3. 将每个子测试结果写入 `suite_manifest.csv`
-4. 最后调用 `collect_task5_simd_suite_results.py` 生成 suite 汇总
-
-## 4.2 `run_task5_simd_benchmark.sh`
-
-该脚本负责单个 benchmark 子任务的执行。其核心行为包括：
-
-- 接收 `case-dir`、`label`、`nproc`、`threads`、`warmup`、`repeat`、`timeout`
-- 自动解析 ABACUS 可执行文件路径
-- 记录 `environment_info.txt`
-- 记录 `run_manifest.csv`
-- 对每个 warmup/repeat 生成 stdout/stderr
-- 每次运行后清理 `OUT.ABACUS`
-- 最后调用 `collect_task5_simd_results.py` 生成单 benchmark 汇总
-
-脚本中的默认配置与 suite 脚本一致：`warmup=1`、`repeat=3`、`timeout=1800`。
-
-## 4.3 `collect_task5_simd_results.py`
-
-该脚本负责单 benchmark 目录下的结果提取与汇总：
-
-- 从 `run_manifest.csv` 读取每次运行的 stdout/stderr 路径
-- 从 stdout 中提取：
-  - `TOTAL Time`
-  - `TIME STATISTICS`
-- 重点关注的 timer key 为：
-  - `PW_Basis_K::gatherp_scatters`
-  - `PW_Basis_K::gathers_scatterp`
-  - `PW_Basis_K::real2recip`
-  - `PW_Basis_K::recip2real`
-- 对 repeat 运行计算：
-  - `median_time_s`
-  - `mean_time_s`
-  - `min_time_s`
-  - `max_time_s`
-- 当同一配置下同时存在 baseline 与当前 label 时，按：
-
-```text
-speedup_vs_baseline = baseline_median_time_s / current_median_time_s
-```
-
-计算加速比。
-
-## 4.4 `collect_task5_simd_suite_results.py`
-
-该脚本负责 suite 级合并与汇总：
-
-- 扫描 suite 目录下所有含 `run_manifest.csv` 的 benchmark 子目录
-- 优先读取各子目录现成的 `summary_results.csv`
-- 聚合生成：
-  - `suite_raw_results.csv`
-  - `suite_summary.csv`
-  - `suite_summary.md`
-- 若同时输入多组 suite 目录，则再次调用 `bench_collect.add_speedup` 合并并计算 speedup
-
-本次最终用于性能分析的主表即：
-
-- `homework_docs/test_cases/task5_suite_runs/combined_baseline_20260530_204538_vs_simd_20260530_200227_v2/suite_summary.csv`
-
-## 5. suite 实际测试矩阵与执行状态
-
-## 5.1 实际使用的 case
-
-不能只根据脚本注释判断本次 suite 实际跑了哪些 case，需要结合实际结果目录与 `suite_manifest.csv` 验证。
-
-经检查：
-
-- `simd_20260530_200227/suite_manifest.csv` 共 27 行
-- `baseline_20260530_204538/suite_manifest.csv` 共 27 行
-- 两边的 `case_name` 都只包含：
-  - `gaas_small`
-  - `gaas_medium`
-  - `gaas_large`
-
-因此，本次正式 suite 实际使用的 case 就是以上 3 个，而不是 `gaas_tiny` 或 `gaas_tiny_40Ry`。
-
-## 5.2 测试矩阵
-
-本次 suite 的实际测试矩阵为：
+结合真实结果目录与 `suite_manifest.csv` 可确认，本次正式对比实际使用了以下配置：
 
 - case：`gaas_small`、`gaas_medium`、`gaas_large`
 - MPI 进程数：`1`、`2`、`4`
 - OpenMP 线程数：`1`、`2`、`4`
-- warmup 次数：`1`
-- repeat 次数：`3`
+- warmup：`1`
+- repeat：`3`
 - timeout：`1800s`
 
-因此每个 suite 的子测试总数为：
+因此每套 suite 共包含：
 
 ```text
-3 cases × 3 nproc × 3 threads = 27 个子测试
+3 cases × 3 nproc × 3 threads = 27 个配置
 ```
 
-## 5.3 输出目录结构
+### 4.2 结果完整性检查
 
-### suite 级目录
+对 baseline 与 simd 两套 suite 的 `suite_manifest.csv` 和 `suite_summary.csv` 逐项检查后，结论如下：
 
-每个 suite 目录包含：
+- baseline 共 27 个配置，全部 `exit_code=0`
+- simd 共 27 个配置，全部 `exit_code=0`
+- baseline 全部配置 `successful_runs=3 / repeat_count=3`
+- simd 全部配置 `successful_runs=3 / repeat_count=3`
 
-- `suite_manifest.csv`
-- `suite_run_log.txt`
-- `suite_summary.csv`
-- `suite_summary.md`
-- `suite_raw_results.csv`
+因此，本次 baseline 与 simd 两套结果都是完整且成功的，没有失败组合或缺失组合。
 
-### benchmark 子目录
+### 4.3 主数据表与 speedup 口径
 
-每个 `case_npX_ompY` 子目录包含：
-
-- `environment_info.txt`
-- `run_manifest.csv`
-- `run_log.txt`
-- `raw_results.csv`
-- `summary_results.csv`
-- `summary_table.md`
-- `logs/`
-
-## 5.4 执行成功率检查
-
-对 baseline 与 simd 两套 suite 的 `suite_manifest.csv` 和 `suite_summary.csv` 逐项检查后，得到以下结论：
-
-- baseline：27 个配置，`suite_manifest.csv` 中所有 `exit_code=0`
-- simd：27 个配置，`suite_manifest.csv` 中所有 `exit_code=0`
-- baseline：`suite_summary.csv` 中所有配置 `successful_runs=3`，`repeat_count=3`
-- simd：`suite_summary.csv` 中所有配置 `successful_runs=3`，`repeat_count=3`
-- baseline：所有配置 `suite_exit_code=0`
-- simd：所有配置 `suite_exit_code=0`
-
-因此，本次 baseline 与 simd 两套 suite 的全部 54 个配置项均执行成功，没有发现失败组合或缺失组合。
-
-## 5.5 suite 执行状态汇总表
-
-| case | nproc | threads | warmup | repeat | baseline suite_exit_code | simd suite_exit_code | baseline successful_runs / repeat_count | simd successful_runs / repeat_count |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| gaas_small | 1 | 1 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_small | 1 | 2 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_small | 1 | 4 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_small | 2 | 1 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_small | 2 | 2 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_small | 2 | 4 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_small | 4 | 1 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_small | 4 | 2 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_small | 4 | 4 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_medium | 1 | 1 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_medium | 1 | 2 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_medium | 1 | 4 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_medium | 2 | 1 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_medium | 2 | 2 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_medium | 2 | 4 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_medium | 4 | 1 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_medium | 4 | 2 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_medium | 4 | 4 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_large | 1 | 1 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_large | 1 | 2 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_large | 1 | 4 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_large | 2 | 1 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_large | 2 | 2 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_large | 2 | 4 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_large | 4 | 1 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_large | 4 | 2 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-| gaas_large | 4 | 4 | 1 | 3 | 0 | 0 | 3 / 3 | 3 / 3 |
-
-## 6. baseline 与 SIMD 结果整理
-
-## 6.1 主数据表选择
-
-本次性能分析以：
+本文性能分析以：
 
 - `homework_docs/test_cases/task5_suite_runs/combined_baseline_20260530_204538_vs_simd_20260530_200227_v2/suite_summary.csv`
 
 作为主数据表。
 
-原因是：
-
-- 它同时包含 baseline 与 simd 两套汇总结果
-- 已经给出 `baseline_median_time_s`
-- 已经给出 `speedup_vs_baseline`
-
-需要说明的是，该 combined 目录本身不是一次 suite 原始输出目录，因此其中 `suite_exit_code`、`suite_start_time`、`suite_end_time` 为 `NA`。这不是测试失败，而是因为 combined 目录只是合并汇总目录，不带原始 suite manifest。本文已回退检查 baseline 与 simd 各自 suite 的 `suite_manifest.csv` 和 `suite_summary.csv`，确认所有配置都执行成功。
-
-## 6.2 speedup 口径确认
-
-`collect_task5_simd_results.py` 与 `collect_task5_simd_suite_results.py` 的逻辑都显示，speedup 的计算方式为：
+所有加速比均按以下真实口径计算：
 
 ```text
 speedup_vs_baseline = baseline_median_time_s / simd_median_time_s
 ```
 
-并且该计算按以下键对齐：
+并且只使用中位数时间 `median_time_s`，不使用单次运行时间，也不使用 mean 替代 median。
 
-- `case_name`
-- `hostname`
-- `nproc`
-- `threads`
+## 5. baseline 与 SIMD 结果整理
 
-本文所有加速比均沿用该口径，仅使用中位数时间计算，不使用单次运行时间，也不使用 mean 替代 median。
-
-## 6.3 baseline vs simd 总表
+### 5.1 baseline vs simd 总表
 
 下表按 `case_name + nproc + threads` 对 baseline 与 simd 的真实中位数结果进行并列整理。
 
@@ -450,9 +276,9 @@ speedup_vs_baseline = baseline_median_time_s / simd_median_time_s
 | gaas_small | 4 | 2 | `6b70def72b81` | `e18908121b32` | `bohrium-667333-1459164` | 3 | 3 | 6.000 | 6.000 | 1.000 | 0.890 | 0.890 | 1.270 | 1.270 | NA | NA | missing gatherp_scatters_s; missing gathers_scatterp_s |
 | gaas_small | 4 | 4 | `6b70def72b81` | `e18908121b32` | `bohrium-667333-1459164` | 3 | 3 | 6.000 | 6.000 | 1.000 | 0.990 | 1.050 | 1.430 | 1.440 | NA | NA | missing gatherp_scatters_s; missing gathers_scatterp_s |
 
-## 7. NA 与 timer 缺失分析
+## 6. NA 与 timer 缺失分析
 
-## 7.1 为什么 `gatherp_scatters_s_median` 与 `gathers_scatterp_s_median` 是 NA
+### 6.1 为什么 `gatherp_scatters_s_median` 与 `gathers_scatterp_s_median` 是 NA
 
 在合并结果表的全部 54 条记录中：
 
@@ -462,7 +288,7 @@ speedup_vs_baseline = baseline_median_time_s / simd_median_time_s
 
 这不是汇总脚本计算错误，而是因为当前 suite 日志中的 `TIME STATISTICS` 表并没有稳定暴露这两个独立 timer 项。
 
-## 7.2 stdout 样本验证
+### 6.2 stdout 样本验证
 
 抽查真实日志，例如：
 
@@ -481,15 +307,13 @@ speedup_vs_baseline = baseline_median_time_s / simd_median_time_s
 
 因此，汇总脚本在提取这两个 timer 时得到空值，最终在 summary 中标记为 NA。
 
-## 7.3 本文对缺失 timer 的处理原则
-
-基于以上事实，本文采用如下表述口径：
+### 6.3 本文对缺失 timer 的处理原则
 
 当前 ABACUS 输出日志未暴露 `gatherp_scatters` / `gathers_scatterp` 的独立计时项，因此本文主要采用端到端 wall-clock 中位数时间作为主性能指标，并结合 `real2recip` / `recip2real` 的中位数时间变化辅助观察平面波变换相关路径的性能变化；但不会把 `real2recip` / `recip2real` 直接等同为 gather/scatter 独立耗时。
 
-## 8. 性能结果分析
+## 7. 性能结果分析
 
-## 8.1 端到端 wall-clock 加速比概览
+### 7.1 端到端 wall-clock 加速比概览
 
 从 `combined ... /suite_summary.csv` 的真实中位数结果看，本次 SIMD 优化后的端到端收益总体较为有限，主要表现为：
 
@@ -499,7 +323,7 @@ speedup_vs_baseline = baseline_median_time_s / simd_median_time_s
 
 换言之，本次优化属于“局部可见、小幅收益”的实现结果，而不是“全面显著提速”。
 
-## 8.2 `gaas_large` 结果
+### 7.2 `gaas_large` 结果
 
 `gaas_large` 共 9 组配置，其中有 5 组出现加速：
 
@@ -522,7 +346,7 @@ speedup_vs_baseline = baseline_median_time_s / simd_median_time_s
 
 说明较大规模 case 上，本次实现能在部分单节点/混合并行配置上带来可见但不大的收益。
 
-## 8.3 `gaas_medium` 结果
+### 7.3 `gaas_medium` 结果
 
 `gaas_medium` 共 9 组配置，只有 2 组出现加速：
 
@@ -537,7 +361,7 @@ speedup_vs_baseline = baseline_median_time_s / simd_median_time_s
 
 这是本次全部 27 组 simd 配置中的最大端到端 speedup。但该收益仅出现在个别配置，并不代表 `gaas_medium` 全面受益。
 
-## 8.4 `gaas_small` 结果
+### 7.4 `gaas_small` 结果
 
 `gaas_small` 共 9 组配置，仅有 1 组出现加速：
 
@@ -547,7 +371,7 @@ speedup_vs_baseline = baseline_median_time_s / simd_median_time_s
 
 这说明在较小规模 case 上，本次优化带来的端到端收益更有限。
 
-## 8.5 `real2recip` / `recip2real` 的辅助观察
+### 7.5 `real2recip` / `recip2real` 的辅助观察
 
 由于缺失独立 gather/scatter timer，本文只能将 `real2recip` 与 `recip2real` 作为辅助观测指标。
 
@@ -563,7 +387,7 @@ speedup_vs_baseline = baseline_median_time_s / simd_median_time_s
 - 但由于没有独立 gather/scatter timer，无法直接定量证明收益全部来自 `gatherp_scatters` / `gathers_scatterp`
 - 端到端 wall-clock 的改善幅度也说明，这次优化更接近“微优化”而非“结构性加速”
 
-## 8.6 性能结论归纳
+### 7.6 性能结论归纳
 
 基于当前真实结果，可以归纳为：
 
@@ -581,7 +405,7 @@ speedup_vs_baseline = baseline_median_time_s / simd_median_time_s
 
 在保持函数接口、MPI 通信逻辑和计算语义不变的前提下，本次对 gather/scatter 本地重排循环的向量化友好改写，在部分实际配置上带来了小幅端到端性能改善，最大观测加速比为 `1.125x`，但整体收益呈现明显的配置相关性。
 
-## 9. 结论
+## 8. 结论
 
 结合真实代码 diff 与真实 suite 结果，题目 5 的 SIMD 优化可以总结为：
 
