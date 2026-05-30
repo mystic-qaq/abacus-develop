@@ -743,4 +743,3 @@ cd build-current-abacus-mpi-local
 
 ---
 
-*本报告基于 collaborate 分支 (`4f61ac629`) 与上游 develop 分支 (`71f35241a`) 的差异分析生成。*

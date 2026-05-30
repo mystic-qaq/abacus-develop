@@ -464,4 +464,6 @@ mpirun -np 3 source/source_basis/module_pw/test/MODULE_PW_pw_test
 ## 附录 C：AI 使用报告
 
 由于本月 GPT 的额度耗尽，所以暂时改用了 Deepseek V4。最大的感受是：除了模型以外，SandBox 也同样重要，Claude Code + Deepseek V4的使用体验（无论是输出速度、输出质量还是检查方便程度）明显优于 Cline + Deepseek V4，甚至可以说接近 Codex + GPT-5.4。
+
 ---
+
