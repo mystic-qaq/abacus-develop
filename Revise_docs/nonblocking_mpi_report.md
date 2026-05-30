@@ -400,7 +400,7 @@ if (this->poolnproc == 1) {
 
 ## 7. 进一步优化方向
 
-### 7.1 短期（可直接实施）
+### 7.1 短期
 
 | 方向 | 方法 | 预期收益 |
 |------|------|---------|
@@ -408,7 +408,7 @@ if (this->poolnproc == 1) {
 | **轮询间隔调节** | 在 `Waitsome` 循环中插入 `sched_yield()` 或短暂 `usleep` | 减少轮询 CPU 占用 |
 | **通信缓冲 shrink** | 添加周期性 `shrink_to_fit()` 或可选的对象池 | 减少长期内存占用 |
 
-### 7.2 中期（需要更多开发）
+### 7.2 中期
 
 | 方向 | 方法 | 预期收益 |
 |------|------|---------|
@@ -416,7 +416,7 @@ if (this->poolnproc == 1) {
 | **Stick-block 双缓冲** | 将 stick 分块，一个 block 通信时另一个 block 做 FFT | 计算与通信在 FFT 层面重叠 |
 | **MPI_Neighbor_alltoallw** | 利用 Cartesian 拓扑邻居通信（如果 MPI 实现更优） | 可能减少通信启动开销 |
 
-### 7.3 长期（架构级）
+### 7.3 长期
 
 | 方向 | 方法 | 预期收益 |
 |------|------|---------|
@@ -461,6 +461,7 @@ cd build-current-abacus-mpi-local
 mpirun -np 3 source/source_basis/module_pw/test/MODULE_PW_pw_test
 ```
 
----
+## 附录 C：AI 使用报告
 
-*本报告基于 WorkflowB 分支阻塞基线 (`76225d5cf`) 与 collaborate 分支非阻塞版本 (`4f61ac629`) 的代码和 benchmark 数据撰写。*
+由于本月 GPT 的额度耗尽，所以暂时改用了 Deepseek V4。最大的感受是：除了模型以外，SandBox 也同样重要，Claude Code + Deepseek V4的使用体验（无论是输出速度、输出质量还是检查方便程度）明显优于 Cline + Deepseek V4，甚至可以说接近 Codex + GPT-5.4。
+---
