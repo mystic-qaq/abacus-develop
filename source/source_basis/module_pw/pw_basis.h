@@ -9,9 +9,15 @@
 #include <complex>
 #include "source_base/module_fft/fft_bundle.h"
 #include <cstring>
+#include <vector>
+#include <atomic>
 #ifdef __MPI
 #include "mpi.h"
 #endif
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <mutex>
 
 namespace ModulePW
 {
@@ -56,8 +62,18 @@ class PW_Basis
 {
 
 public:
+    struct CacheStats
+    {
+        std::uint64_t local_pw_hits = 0;
+        std::uint64_t local_pw_misses = 0;
+        std::uint64_t uniqgg_hits = 0;
+        std::uint64_t uniqgg_misses = 0;
+        std::size_t cache_bytes = 0;
+    };
+
     std::string classname;
     PW_Basis();
+    PW_Basis(const PW_Basis& other);
     PW_Basis(std::string device_, std::string precision_);
     virtual ~PW_Basis();
     //Init mpi parameters
@@ -137,8 +153,32 @@ public:
     //distribute plane waves and grids and set up fft
     void setuptransform();
 
+    CacheStats get_cache_stats() const;
+    void reset_cache_stats();
+
 protected:
     int *startnsz_per=nullptr;//useless intermediate variable// startnsz_per[ip]: starting is * nz stick in the ip^th proc.
+
+    virtual void invalidate_cache()
+    {
+        this->local_pw_cache_valid.store(false);
+        this->uniqgg_cache_valid.store(false);
+    }
+
+    void clear_owned_cache();
+
+    std::atomic<bool> local_pw_cache_valid{false};
+    std::atomic<bool> uniqgg_cache_valid{false};
+    mutable std::mutex cache_mutex;
+    std::unique_ptr<double[]> gg_cache_storage;
+    std::unique_ptr<ModuleBase::Vector3<double>[]> gdirect_cache_storage;
+    std::unique_ptr<ModuleBase::Vector3<double>[]> gcar_cache_storage;
+    std::unique_ptr<int[]> ig2igg_cache_storage;
+    std::unique_ptr<double[]> gg_uniq_cache_storage;
+    std::atomic<std::uint64_t> local_pw_cache_hits{0};
+    std::atomic<std::uint64_t> local_pw_cache_misses{0};
+    std::atomic<std::uint64_t> uniqgg_cache_hits{0};
+    std::atomic<std::uint64_t> uniqgg_cache_misses{0};
 
     //distribute plane waves to different processors
     void distribute_g();
@@ -420,6 +460,9 @@ public:
     template <typename T>
     void gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const;
 
+    template <typename T>
+    std::complex<T>* acquire_comm_workbuf(const int size) const;
+
   public:
     //get fftixy2is;
     void getfftixy2is(int * fftixy2is) const;
@@ -441,7 +484,23 @@ protected:
   std::string precision = "double"; ///< single, double, mixing
   bool double_data_ = true;         ///<  if has double data
   bool float_data_ = false;         ///< if has float data
+  mutable std::vector<std::complex<float>> comm_workbuf_float_;
+  mutable std::vector<std::complex<double>> comm_workbuf_double_;
 };
+
+template <>
+inline std::complex<float>* PW_Basis::acquire_comm_workbuf<float>(const int size) const
+{
+    this->comm_workbuf_float_.resize(size);
+    return this->comm_workbuf_float_.data();
+}
+
+template <>
+inline std::complex<double>* PW_Basis::acquire_comm_workbuf<double>(const int size) const
+{
+    this->comm_workbuf_double_.resize(size);
+    return this->comm_workbuf_double_.data();
+}
 }
 #endif // PWBASIS_H
 #include "pw_basis_sup.h"
