@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import collect_task5_simd_results as bench_collect
 
@@ -54,6 +54,50 @@ def read_suite_manifest(suite_dir: Path) -> Dict[str, Dict[str, str]]:
     return mapping
 
 
+def normalize_value(value: str) -> object:
+    if value == "NA" or value == "":
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return value
+
+
+def load_existing_summary(benchmark_dir: Path) -> Optional[Dict[str, object]]:
+    summary_path = benchmark_dir / "summary_results.csv"
+    if not summary_path.exists():
+        return None
+
+    with summary_path.open("r", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        first_row = next(reader, None)
+        if first_row is None:
+            return None
+
+    summary_row: Dict[str, object] = {}
+    for key, value in first_row.items():
+        summary_row[key] = normalize_value(value)
+    summary_row["input_dir"] = str(benchmark_dir.resolve())
+    return summary_row
+
+
+def load_existing_raw_rows(benchmark_dir: Path) -> List[Dict[str, object]]:
+    raw_path = benchmark_dir / "raw_results.csv"
+    if not raw_path.exists():
+        return []
+
+    rows: List[Dict[str, object]] = []
+    with raw_path.open("r", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            parsed_row: Dict[str, object] = {}
+            for key, value in row.items():
+                parsed_row[key] = normalize_value(value)
+            parsed_row["input_dir"] = str(benchmark_dir.resolve())
+            rows.append(parsed_row)
+    return rows
+
+
 def enrich_summary_rows(summary_rows: List[Dict[str, object]], suite_dirs: List[Path]) -> List[Dict[str, object]]:
     manifest_maps = {str(suite_dir.resolve()): read_suite_manifest(suite_dir) for suite_dir in suite_dirs}
 
@@ -69,6 +113,11 @@ def enrich_summary_rows(summary_rows: List[Dict[str, object]], suite_dirs: List[
         row["suite_start_time"] = suite_manifest_row.get("start_time", "NA")
         row["suite_end_time"] = suite_manifest_row.get("end_time", "NA")
     return summary_rows
+
+
+def ensure_input_dir(summary_row: Dict[str, object]) -> Dict[str, object]:
+    summary_row["input_dir"] = str(Path(str(summary_row.get("input_dir", "NA"))).resolve())
+    return summary_row
 
 
 def write_suite_summary_csv(rows: List[Dict[str, object]], out_path: Path) -> None:
@@ -152,26 +201,29 @@ def main() -> None:
         benchmark_dirs.extend(discover_benchmark_dirs(suite_dir))
 
     raw_rows: List[Dict[str, object]] = []
+    summary_rows: List[Dict[str, object]] = []
+
     for benchmark_dir in benchmark_dirs:
-        raw_rows.extend(bench_collect.collect_rows(benchmark_dir))
+        existing_summary = load_existing_summary(benchmark_dir)
+        if existing_summary is not None:
+            summary_rows.append(ensure_input_dir(existing_summary))
+        else:
+            collected_rows = bench_collect.collect_rows(benchmark_dir)
+            raw_rows.extend(collected_rows)
+            per_dir_summary = bench_collect.summarize_rows(collected_rows)
+            for row in per_dir_summary:
+                row["input_dir"] = str(benchmark_dir.resolve())
+                summary_rows.append(row)
+
+        existing_raw_rows = load_existing_raw_rows(benchmark_dir)
+        if existing_raw_rows:
+            raw_rows.extend(existing_raw_rows)
+        elif existing_summary is None:
+            continue
+        else:
+            raw_rows.extend(bench_collect.collect_rows(benchmark_dir))
 
     bench_collect.write_raw_results(raw_rows, out_dir / "suite_raw_results.csv")
-    summary_rows = bench_collect.summarize_rows(raw_rows)
-    for row in summary_rows:
-        if "input_dir" not in row:
-            row["input_dir"] = next(
-                (
-                    str(Path(raw_row["input_dir"]).resolve())
-                    for raw_row in raw_rows
-                    if raw_row.get("label") == row.get("label")
-                    and raw_row.get("case_name") == row.get("case_name")
-                    and raw_row.get("git_commit") == row.get("git_commit")
-                    and raw_row.get("hostname") == row.get("hostname")
-                    and raw_row.get("nproc") == row.get("nproc")
-                    and raw_row.get("threads") == row.get("threads")
-                ),
-                "NA",
-            )
     bench_collect.add_speedup(summary_rows)
     summary_rows = enrich_summary_rows(summary_rows, suite_dirs)
 
