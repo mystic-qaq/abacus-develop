@@ -69,7 +69,7 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
     if (nplane_gps > 0)
     {
 #ifdef _OPENMP
-        #pragma omp parallel for
+#pragma omp parallel for
 #endif
         for (int istot = 0; istot < nstot_gps; ++istot)
         {
@@ -141,7 +141,7 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
     {
         const int nzip = numz_gps[ip];
 #ifdef _OPENMP
-        #pragma omp parallel for
+#pragma omp parallel for schedule(static)
 #endif
         for (int is = 0; is < nst_gps; ++is)
         {
@@ -271,7 +271,7 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
     std::complex<T>* sendbuf = commbuf;
     std::complex<T>* recvbuf = commbuf + send_count_;
 #ifdef _OPENMP
-    #pragma omp parallel for collapse(2)
+#pragma omp parallel for collapse(2)
 #endif
     for (int ip = 0; ip < poolnproc_ ;++ip)
     {
@@ -366,7 +366,7 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
         }
         const int istot0 = istot_offsets[ip];
 #ifdef _OPENMP
-        #pragma omp parallel for
+#pragma omp parallel for
 #endif
         for (int is = 0; is < peer_nst; ++is)
         {

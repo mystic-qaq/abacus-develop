@@ -1,0 +1,110 @@
+                                                                                     
+                              ABACUS v3.11.0-beta.2
+
+               Atomic-orbital Based Ab-initio Computation at UStc                    
+
+                     Website: http://abacus.ustc.edu.cn/                             
+               Documentation: https://abacus.deepmodeling.com/                       
+                  Repository: https://github.com/abacusmodeling/abacus-develop       
+                              https://github.com/deepmodeling/abacus-develop         
+                      Commit: 23947d864 (Fri May 15 19:02:20 2026 +0800)
+
+ Sat May 23 21:59:05 2026
+ MAKE THE DIR         : OUT.autotest/
+ RUNNING WITH DEVICE  : CPU / Intel(R) Core(TM) i7-14650HX (x1)
+ WARNING: some of potential function is set to zero cause of less than 1e-30.
+ UNIFORM GRID DIM     : 45 * 45 * 45
+ UNIFORM GRID DIM(BIG): 45 * 45 * 45
+ DONE(0.307946   SEC) : SYMMETRY
+ DONE(0.308228   SEC) : SETUP UNITCELL
+ DONE(0.353111   SEC) : INIT K-POINTS
+ ----------------------------------------------------------------
+ Self-consistent calculations for electrons
+ ----------------------------------------------------------------
+ SPIN    KPOINTS         PROCESSES   THREADS/PROC  THREADS/TOTAL 
+ 1       3               2           4             8             
+ ----------------------------------------------------------------
+ Use plane wave basis
+ ----------------------------------------------------------------
+ ELEMENT NATOM       
+ Si      2           
+ ----------------------------------------------------------------
+ Initial plane wave basis and FFT box
+ ----------------------------------------------------------------
+ DONE(0.365229   SEC) : INIT PLANEWAVE
+ START CHARGE         : ATOMIC
+ DONE(0.377338   SEC) : LOCAL POTENTIAL
+ DONE(0.392268   SEC) : NON-LOCAL POTENTIAL
+ MEMORY FOR PSI (MB)  : 0.614685
+ DONE(0.414096   SEC) : INIT BASIS
+
+ ================================================================
+ SELF-CONSISTENT: 
+ ================================================================
+ DONE(0.445502   SEC) : INIT SCF
+ ITER       ETOT/eV          EDIFF/eV         DRHO     TIME/s
+ CG1     -2.61160831e+02   0.00000000e+00   1.1719e-01   0.04
+ CG2     -2.61203308e+02  -4.24761745e-02   8.7714e-03   0.03
+ CG3     -2.61213593e+02  -1.02852362e-02   6.5212e-05   0.04
+ CG4     -2.61214219e+02  -6.25759142e-04   3.5805e-06   0.05
+ CG5     -2.61214221e+02  -2.74218713e-06   6.1536e-08   0.04
+ CG6     -2.61214222e+02  -4.16130942e-07   3.7353e-09   0.05
+ CG7     -2.61214222e+02  -3.25608706e-09   2.9810e-11   0.04
+ CG8     -2.61214222e+02  -1.92140169e-10   3.3009e-13   0.05
+ CG9     -2.61214222e+02  -3.09357756e-12   1.2201e-15   0.04
+ CG10    -2.74822145e+02  -1.36079235e+01   1.3498e-01   0.25
+ CG11    -2.73597758e+02   1.22438712e+00   1.5320e-01   0.21
+ CG12    -2.66654922e+02   6.94283587e+00   5.5576e-02   0.22
+ CG13    -3.03983047e+02  -3.73281246e+01   4.7649e-02   0.26
+ CG14    -2.66654821e+02   3.73282258e+01   2.4937e-02   0.25
+ CG15    -3.02849735e+02  -3.61949144e+01   5.1472e-02   0.34
+ m = 1
+j = 0 lagrange norm = 15.7179
+j = 1 lagrange norm = 47.8855
+ in DiagoCG, psi norm = -9.05754
+ This may be due to npwx < nbands: the number of plane waves is less than
+ the number of bands, leading to a rank-deficient problem.
+ Please increase ecutwfc or reduce nbands.
+ If you use GNU compiler, it may due to the zdotc is unavailable.
+ 
+ ---------------------------------------------------------
+                         !NOTICE!                         
+ ---------------------------------------------------------
+ 
+ psi_norm <= 0.0
+ CHECK IN FILE : OUT.autotest/warning.log
+ 
+ For detailed manual of ABACUS, please see the website
+ https://abacus.deepmodeling.com
+ For any questions, propose issues on the website
+ https://github.com/deepmodeling/abacus-develop/issues
+ ---------------------------------------------------------
+                         !NOTICE!                         
+ ---------------------------------------------------------
+
+ TIME STATISTICS
+-----------------------------------------------------------------
+   CLASS_NAME          NAME        TIME/s  CALLS   AVG/s  PER/%  
+-----------------------------------------------------------------
+                 total             2.42   17       0.14   100.00 
+ Driver          reading           0.23   1        0.23   9.50   
+ ESolver_KS_PW   before_scf        0.03   1        0.03   1.20   
+ Potential       cal_veff          0.03   16       0.00   1.12   
+ PW_Basis_Sup    real2recip        0.02   62       0.00   1.01   
+ Symmetry_rho    begin             0.05   16       0.00   1.92   
+ Symmetry        rhog_symmetry     0.02   16       0.00   1.02   
+ Operator        hPsi              1.57   3190     0.00   64.92  
+ Operator        veff_pw           1.47   3190     0.00   61.00  
+ PW_Basis_K      recip2real        0.79   3696     0.00   32.54  
+ PW_Basis_K      real2recip        0.71   3426     0.00   29.51  
+ Operator        nonlocal_pw       0.08   3190     0.00   3.42   
+ Nonlocal        add_nonlocal_pp   0.03   3190     0.00   1.30   
+ ESolver_KS_PW   hamilt2rho_single 1.86   16       0.12   76.84  
+ HSolverPW       solve             1.81   16       0.11   75.03  
+ HSolverPW       solve_psik        1.74   46       0.04   71.95  
+ DiagoCG         diag_once         1.61   46       0.03   66.50  
+ ElecStatePW     psiToRho          0.06   15       0.00   2.61   
+ DiagoIterAssist diag_subspace     0.13   43       0.00   5.37   
+-----------------------------------------------------------------
+
+ See output information in : OUT.autotest/
