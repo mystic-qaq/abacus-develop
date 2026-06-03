@@ -1,4 +1,5 @@
 #include "pw_basis.h"
+#include <mutex>
 
 #include <utility>
 #include "source_base/mymath.h"
@@ -245,7 +246,7 @@ void PW_Basis::collect_local_pw()
         ModuleBase::timer::end(this->classname, "collect_local_pw");
         return;
     }
-    std::lock_guard<std::mutex> guard(this->cache_mutex);
+    std::lock_guard<cache_spinlock> guard(this->cache_lock);
     if (this->local_pw_cache_valid.load())
     {
         this->local_pw_cache_hits.fetch_add(1);
@@ -324,7 +325,7 @@ void PW_Basis::collect_uniqgg()
         ModuleBase::timer::end(this->classname, "collect_uniqgg");
         return;
     }
-    std::lock_guard<std::mutex> guard(this->cache_mutex);
+    std::lock_guard<cache_spinlock> guard(this->cache_lock);
     if (this->uniqgg_cache_valid.load())
     {
         this->uniqgg_cache_hits.fetch_add(1);
