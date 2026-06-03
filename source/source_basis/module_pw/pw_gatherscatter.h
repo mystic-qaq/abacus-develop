@@ -31,9 +31,14 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
             int ixy = istot2ixy_[is];
             std::complex<T> *outp = &out[is*nz_];
             std::complex<T> *inp = &in[ixy*nz_];
-            for(int iz = 0 ; iz < nz_ ; ++iz)
+            T* __restrict__ outp_r = reinterpret_cast<T*>(outp);
+            const T* __restrict__ inp_r = reinterpret_cast<const T*>(inp);
+#ifdef __GNUC__
+#pragma GCC ivdep
+#endif
+            for(int iz = 0 ; iz < 2 * nz_ ; ++iz)
             {
-                outp[iz] = inp[iz];
+                outp_r[iz] = inp_r[iz];
             }
         }
         ModuleBase::timer::end(this->classname, "gatherp_scatters");
@@ -64,16 +69,21 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
     if (nplane_gps > 0)
     {
 #ifdef _OPENMP
-        #pragma omp parallel for
+#pragma omp parallel for
 #endif
         for (int istot = 0; istot < nstot_gps; ++istot)
         {
             int ixy = istot2ixy_gps[istot];
             std::complex<T> *outp = &sendbuf[istot * nplane_gps];
             std::complex<T> *inp = &in[ixy * nplane_gps];
-            for (int iz = 0; iz < nplane_gps; ++iz)
+            T* __restrict__ outp_r = reinterpret_cast<T*>(outp);
+            const T* __restrict__ inp_r = reinterpret_cast<const T*>(inp);
+#ifdef __GNUC__
+#pragma GCC ivdep
+#endif
+            for (int iz = 0; iz < 2 * nplane_gps; ++iz)
             {
-                outp[iz] = inp[iz];
+                outp_r[iz] = inp_r[iz];
             }
         }
     }
@@ -131,15 +141,20 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
     {
         const int nzip = numz_gps[ip];
 #ifdef _OPENMP
-        #pragma omp parallel for
+#pragma omp parallel for schedule(static)
 #endif
         for (int is = 0; is < nst_gps; ++is)
         {
             std::complex<T> *outp = &out[is * nz_gps + startz_gps[ip]];
             std::complex<T> *inp = &recvbuf[startg_gps[ip] + is * nzip];
-            for (int izip = 0; izip < nzip; ++izip)
+            T* __restrict__ outp_r = reinterpret_cast<T*>(outp);
+            const T* __restrict__ inp_r = reinterpret_cast<const T*>(inp);
+#ifdef __GNUC__
+#pragma GCC ivdep
+#endif
+            for (int izip = 0; izip < 2 * nzip; ++izip)
             {
-                outp[izip] = inp[izip];
+                outp_r[izip] = inp_r[izip];
             }
         }
     };
@@ -222,9 +237,14 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
             int ixy = istot2ixy_[is];
             std::complex<T> *outp = &out[ixy*nz_];
             std::complex<T> *inp = &in[is*nz_];
-            for(int iz = 0 ; iz < nz_ ; ++iz)
+            T* __restrict__ outp_r = reinterpret_cast<T*>(outp);
+            const T* __restrict__ inp_r = reinterpret_cast<const T*>(inp);
+#ifdef __GNUC__
+#pragma GCC ivdep
+#endif
+            for(int iz = 0 ; iz < 2 * nz_ ; ++iz)
             {
-                outp[iz] = inp[iz];
+                outp_r[iz] = inp_r[iz];
             }
         }
         ModuleBase::timer::end(this->classname, "gathers_scatterp");
@@ -251,7 +271,7 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
     std::complex<T>* sendbuf = commbuf;
     std::complex<T>* recvbuf = commbuf + send_count_;
 #ifdef _OPENMP
-    #pragma omp parallel for collapse(2)
+#pragma omp parallel for collapse(2)
 #endif
     for (int ip = 0; ip < poolnproc_ ;++ip)
     {
@@ -262,9 +282,14 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
             std::complex<T> *inp0 = &in[startz_[ip]];
             std::complex<T> *outp = &outp0[is * nzip];
             std::complex<T> *inp = &inp0[is * nz_ ];
-            for (int izip = 0; izip < nzip; ++izip)
+            T* __restrict__ outp_r = reinterpret_cast<T*>(outp);
+            const T* __restrict__ inp_r = reinterpret_cast<const T*>(inp);
+#ifdef __GNUC__
+#pragma GCC ivdep
+#endif
+            for (int izip = 0; izip < 2 * nzip; ++izip)
             {
-                outp[izip] = inp[izip];
+                outp_r[izip] = inp_r[izip];
             }
         }
     }
@@ -341,7 +366,7 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
         }
         const int istot0 = istot_offsets[ip];
 #ifdef _OPENMP
-        #pragma omp parallel for
+#pragma omp parallel for
 #endif
         for (int is = 0; is < peer_nst; ++is)
         {
@@ -349,9 +374,14 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
             const int ixy = istot2ixy[istot];
             std::complex<T> *outp = &out[ixy * nplane];
             std::complex<T> *inp = &recvbuf[startr_[ip] + is * nplane];
-            for (int iz = 0; iz < nplane; ++iz)
+            T* __restrict__ outp_r = reinterpret_cast<T*>(outp);
+            const T* __restrict__ inp_r = reinterpret_cast<const T*>(inp);
+#ifdef __GNUC__
+#pragma GCC ivdep
+#endif
+            for (int iz = 0; iz < 2 * nplane; ++iz)
             {
-                outp[iz] = inp[iz];
+                outp_r[iz] = inp_r[iz];
             }
         }
     };

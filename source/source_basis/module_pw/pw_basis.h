@@ -10,12 +10,53 @@
 #include "source_base/module_fft/fft_bundle.h"
 #include <cstring>
 #include <vector>
+#include <atomic>
 #ifdef __MPI
 #include "mpi.h"
 #endif
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <mutex>
 
 namespace ModulePW
 {
+
+/**
+ * @brief Interface for deciding whether a reciprocal grid point belongs to the
+ *        plane-wave set.
+ *
+ * The distribution code depends only on this predicate, so tests can inject a
+ * mock criterion and production code can use the energy-cutoff implementation.
+ */
+class IPWCriterion
+{
+  public:
+    virtual ~IPWCriterion() = default;
+    virtual bool is_in_sphere(const ModuleBase::Vector3<double>& g) const = 0;
+};
+
+/**
+ * @brief Plane-wave criterion based on g * GGT * g <= ggecut.
+ */
+class EnergyCutoffCriterion : public IPWCriterion
+{
+  public:
+    EnergyCutoffCriterion(const double ggecut, const ModuleBase::Matrix3& GGT, const bool full_pw = false)
+        : ggecut_(ggecut), GGT_(GGT), full_pw_(full_pw)
+    {
+    }
+
+    bool is_in_sphere(const ModuleBase::Vector3<double>& g) const override
+    {
+        return full_pw_ || g * (GGT_ * g) <= ggecut_;
+    }
+
+  private:
+    double ggecut_ = 0.0;
+    ModuleBase::Matrix3 GGT_;
+    bool full_pw_ = false;
+};
 
 /**
  * @brief A class which can convert a function of "r" to the corresponding linear
@@ -57,8 +98,18 @@ class PW_Basis
 {
 
 public:
+    struct CacheStats
+    {
+        std::uint64_t local_pw_hits = 0;
+        std::uint64_t local_pw_misses = 0;
+        std::uint64_t uniqgg_hits = 0;
+        std::uint64_t uniqgg_misses = 0;
+        std::size_t cache_bytes = 0;
+    };
+
     std::string classname;
     PW_Basis();
+    PW_Basis(const PW_Basis& other);
     PW_Basis(std::string device_, std::string precision_);
     virtual ~PW_Basis();
     //Init mpi parameters
@@ -138,8 +189,32 @@ public:
     //distribute plane waves and grids and set up fft
     void setuptransform();
 
+    CacheStats get_cache_stats() const;
+    void reset_cache_stats();
+
 protected:
     int *startnsz_per=nullptr;//useless intermediate variable// startnsz_per[ip]: starting is * nz stick in the ip^th proc.
+
+    virtual void invalidate_cache()
+    {
+        this->local_pw_cache_valid.store(false);
+        this->uniqgg_cache_valid.store(false);
+    }
+
+    void clear_owned_cache();
+
+    std::atomic<bool> local_pw_cache_valid{false};
+    std::atomic<bool> uniqgg_cache_valid{false};
+    mutable std::mutex cache_mutex;
+    std::unique_ptr<double[]> gg_cache_storage;
+    std::unique_ptr<ModuleBase::Vector3<double>[]> gdirect_cache_storage;
+    std::unique_ptr<ModuleBase::Vector3<double>[]> gcar_cache_storage;
+    std::unique_ptr<int[]> ig2igg_cache_storage;
+    std::unique_ptr<double[]> gg_uniq_cache_storage;
+    std::atomic<std::uint64_t> local_pw_cache_hits{0};
+    std::atomic<std::uint64_t> local_pw_cache_misses{0};
+    std::atomic<std::uint64_t> uniqgg_cache_hits{0};
+    std::atomic<std::uint64_t> uniqgg_cache_misses{0};
 
     //distribute plane waves to different processors
     void distribute_g();
@@ -202,7 +277,8 @@ protected:
     //Count the total number of planewaves (tot_npw) and sticks (this->nstot) (in distributeg method1 and method2)
     void count_pw_st(
         int* st_length2D, // the number of planewaves that belong to the stick located on (x, y).
-        int* st_bottom2D  // the z-coordinate of the bottom of stick on (x, y).
+        int* st_bottom2D, // the z-coordinate of the bottom of stick on (x, y).
+        const IPWCriterion* criterion = nullptr // optional injectable plane-wave cutoff predicate.
     );
 
     //get ig2isz and is2fftixy

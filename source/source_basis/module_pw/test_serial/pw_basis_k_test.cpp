@@ -183,9 +183,65 @@ TEST_F(PWBasisKTEST, CollectLocalPW)
 	const bool xprime_in = true;	
 	basis_k.initparameters(gamma_only_in, gk_ecut_in, nks_in,kvec_d_in, distribution_type_in, xprime_in);	
 	EXPECT_NO_THROW(basis_k.setuptransform());
+	basis_k.reset_k_cache_stats();
 	EXPECT_NO_THROW(basis_k.collect_local_pw());
+	ASSERT_GT(basis_k.npwk[0], 0);
+	auto* gk2_ptr = basis_k.get_gk2_data<double>();
+	auto* gcar_ptr = basis_k.get_gcar_data<double>();
+	const double gk2_sample = basis_k.getgk2(0,0);
+	const auto stats_after_build = basis_k.get_k_cache_stats();
+	EXPECT_EQ(stats_after_build.gcar_misses, 1);
+	EXPECT_EQ(stats_after_build.gk2_misses, 1);
+	EXPECT_NO_THROW(basis_k.collect_local_pw());
+	EXPECT_EQ(basis_k.get_gk2_data<double>(), gk2_ptr);
+	EXPECT_EQ(basis_k.get_gcar_data<double>(), gcar_ptr);
+	EXPECT_DOUBLE_EQ(basis_k.getgk2(0,0), gk2_sample);
+	EXPECT_NO_THROW(basis_k.collect_local_pw(1.0, 0.5, 0.2));
+	EXPECT_EQ(basis_k.get_gcar_data<double>(), gcar_ptr);
+	const auto stats_after_hits = basis_k.get_k_cache_stats();
+	EXPECT_EQ(stats_after_hits.gcar_hits, 2);
+	EXPECT_EQ(stats_after_hits.gcar_misses, 1);
+	EXPECT_EQ(stats_after_hits.gk2_hits, 1);
+	EXPECT_EQ(stats_after_hits.gk2_misses, 2);
+	EXPECT_GT(stats_after_hits.cache_bytes, 0);
 	EXPECT_EQ(basis_k.npw,3695);
 	EXPECT_EQ(basis_k.npwk_max,2721);
 }
 
+TEST_F(PWBasisKTEST, CacheInvalidationByKParameters)
+{
+	ModulePW::PW_Basis_K basis_k(device_flag, precision_double);
+	double lat0 = 1.8897261254578281;
+	ModuleBase::Matrix3 latvec(10.0,0.0,0.0,
+				0.0,10.0,0.0,
+				0.0,0.0,10.0);
+	basis_k.initgrids(lat0,latvec,10.0);
+	const ModuleBase::Vector3<double> kvec_d_in[2] = { {0.0, 0.0, 0.0}, {0.1, 0.2, 0.3} };
+	basis_k.initparameters(true, 11.0, 2, kvec_d_in, 1, true);
+	ASSERT_NO_THROW(basis_k.setuptransform());
 
+	basis_k.reset_k_cache_stats();
+	basis_k.collect_local_pw();
+	basis_k.collect_local_pw();
+	auto stats_after_hit = basis_k.get_k_cache_stats();
+	EXPECT_EQ(stats_after_hit.gcar_hits, 1);
+	EXPECT_EQ(stats_after_hit.gcar_misses, 1);
+	EXPECT_EQ(stats_after_hit.gk2_hits, 1);
+	EXPECT_EQ(stats_after_hit.gk2_misses, 1);
+
+	const ModuleBase::Vector3<double> kvec_d_changed[2] = { {0.0, 0.0, 0.0}, {0.25, 0.125, 0.375} };
+	basis_k.initparameters(true, 11.0, 2, kvec_d_changed, 1, true);
+	ASSERT_NO_THROW(basis_k.setuptransform());
+	basis_k.collect_local_pw();
+	auto stats_after_k_change = basis_k.get_k_cache_stats();
+	EXPECT_EQ(stats_after_k_change.gcar_misses, 2);
+	EXPECT_EQ(stats_after_k_change.gk2_misses, 2);
+
+	basis_k.collect_local_pw(1.0, 0.5, 0.2);
+	auto stats_after_erf_change = basis_k.get_k_cache_stats();
+	EXPECT_EQ(stats_after_erf_change.gcar_hits, 2);
+	EXPECT_EQ(stats_after_erf_change.gcar_misses, 2);
+	EXPECT_EQ(stats_after_erf_change.gk2_hits, 1);
+	EXPECT_EQ(stats_after_erf_change.gk2_misses, 3);
+	EXPECT_GT(stats_after_erf_change.cache_bytes, 0);
+}

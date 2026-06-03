@@ -2,6 +2,12 @@
 #include "source_base/tool_quit.h"
 #include "source_base/global_function.h"
 #include "source_base/timer.h"
+#include <algorithm>
+#include <limits>
+#include <vector>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 namespace ModulePW
 {
 /**
@@ -42,12 +48,12 @@ void PW_Basis::distribute_g()
 
 void PW_Basis::count_pw_st(
         int* st_length2D, // the number of planewaves that belong to the stick located on (x, y).
-        int* st_bottom2D  // the z-coordinate of the bottom of stick on (x, y).
+        int* st_bottom2D, // the z-coordinate of the bottom of stick on (x, y).
+        const IPWCriterion* criterion // injectable plane-wave cutoff predicate; nullptr uses energy cutoff.
 )
 {
     ModuleBase::GlobalFunc::ZEROS(st_length2D, this->fftnxy);
-    ModuleBase::GlobalFunc::ZEROS(st_bottom2D, this->fftnxy);
-    ModuleBase::Vector3<double> f;
+    std::fill(st_bottom2D, st_bottom2D + this->fftnxy, std::numeric_limits<int>::max());
 
     // determine the scaning area along x-direct, if gamma-only && xprime, only positive axis is used.
     int ix_end = int(this->nx / 2) + 1;
@@ -89,10 +95,58 @@ void PW_Basis::count_pw_st(
     this->lix = this->rix = 0;
     this->npwtot = 0;
     this->nstot = 0;
+    int npwtot_total = 0;
+    int nstot_total = 0;
+    int liy_local = 0;
+    int riy_local = 0;
+    int lix_local = 0;
+    int rix_local = 0;
+
+    const int fftny_ = this->fftny;
+    const int nx_ = this->nx;
+    const int ny_ = this->ny;
+    const int iy_range = iy_end - iy_start + 1;
+
+    const EnergyCutoffCriterion default_criterion(this->ggecut, this->GGT, this->full_pw);
+    const IPWCriterion* criterion_ptr = (criterion == nullptr) ? &default_criterion : criterion;
+
+    struct StickRecord
+    {
+        int order;
+        int index;
+        int length;
+        int bottom;
+    };
+
+#ifdef _OPENMP
+    const int max_threads = omp_get_max_threads();
+#else
+    const int max_threads = 1;
+#endif
+    std::vector<std::vector<StickRecord>> stick_records(max_threads);
+
+    // OpenMP parallelization: the ix and iy loops are collapsed into a single
+    // iteration space and distributed among threads. Each thread accumulates
+    // its findings into a private StickRecord buffer selected by thread id. The
+    // buffers are merged and replayed in the original serial scan order after
+    // the parallel loop to keep st_length2D and st_bottom2D deterministic.
+    // Scalar counters and x/y bounds use OpenMP reductions; f, length and
+    // bottom are loop-private, while criterion_ptr only performs const reads.
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) reduction(+ : npwtot_total, nstot_total) reduction(min : riy_local, rix_local) reduction(max : liy_local, lix_local)
+#endif
     for (int ix = ix_start; ix <= ix_end; ++ix)
     {
         for (int iy = iy_start; iy <= iy_end; ++iy)
         {
+            ModuleBase::Vector3<double> f;
+#ifdef _OPENMP
+            const int tid = omp_get_thread_num();
+#else
+            const int tid = 0;
+#endif
+            auto& records = stick_records[tid];
+
             // we shift all sticks to the first quadrant in x-y plane here.
             // (ix, iy, iz) is the direct coordinates of planewaves.
             // x and y is the coordinates of shifted sticks in x-y plane.
@@ -100,42 +154,84 @@ void PW_Basis::count_pw_st(
             // so that its index in st_length and st_bottom is 9 * 10 + 2 = 92.
             int x = ix;
             int y = iy;
-            if (x < 0) { x += this->nx;
-}
-            if (y < 0) { y += this->ny;
-}
-            int index = x * this->fftny + y;
+            if (x < 0)
+            {
+                x += nx_;
+            }
+            if (y < 0)
+            {
+                y += ny_;
+            }
+            int index = x * fftny_ + y;
 
             int length = 0; // number of planewave on stick (x, y).
+            int bottom = std::numeric_limits<int>::max();
             for (int iz = iz_start; iz <= iz_end; ++iz)
             {
                 f.x = ix;
                 f.y = iy;
                 f.z = iz;
-                double modulus = f * (this->GGT * f);
-                if (modulus <= this->ggecut || this->full_pw)
+                if (criterion_ptr->is_in_sphere(f))
                 {
-                    if (length == 0) { st_bottom2D[index] = iz; // length == 0 means this point is the bottom of stick (x, y).
-}
-                    ++this->npwtot;
+                    if (length == 0)
+                    {
+                        bottom = iz; // length == 0 means this point is the bottom of stick (x, y).
+                    }
+                    ++npwtot_total;
                     ++length;
-                    if(iy < this->riy) { this->riy = iy;
-}
-                    if(iy > this->liy) { this->liy = iy;
-}
-                    if(ix < this->rix) { this->rix = ix;
-}
-                    if(ix > this->lix) { this->lix = ix;
-}
+                    if(iy < riy_local)
+                    {
+                        riy_local = iy;
+                    }
+                    if(iy > liy_local)
+                    {
+                        liy_local = iy;
+                    }
+                    if(ix < rix_local)
+                    {
+                        rix_local = ix;
+                    }
+                    if(ix > lix_local)
+                    {
+                        lix_local = ix;
+                    }
                 }
             }
             if (length > 0)
             {
-                st_length2D[index] = length;
-                ++this->nstot;
+                records.push_back({(ix - ix_start) * iy_range + (iy - iy_start), index, length, bottom});
+                ++nstot_total;
             }
         }
     }
+
+    std::vector<StickRecord> ordered_records;
+    this->npwtot = npwtot_total;
+    this->nstot = nstot_total;
+    for (int tid = 0; tid < max_threads; ++tid)
+    {
+        ordered_records.insert(ordered_records.end(), stick_records[tid].begin(), stick_records[tid].end());
+    }
+    std::sort(ordered_records.begin(), ordered_records.end(), [](const StickRecord& a, const StickRecord& b) {
+        return a.order < b.order;
+    });
+    for (const StickRecord& stick : ordered_records)
+    {
+        st_length2D[stick.index] = stick.length;
+        st_bottom2D[stick.index] = stick.bottom;
+    }
+
+    for (int ixy = 0; ixy < this->fftnxy; ++ixy)
+    {
+        if (st_length2D[ixy] == 0)
+        {
+            st_bottom2D[ixy] = 0;
+        }
+    }
+    this->riy = riy_local;
+    this->liy = liy_local;
+    this->rix = rix_local;
+    this->lix = lix_local;
     riy += this->ny;
     rix += this->nx;
     return;
@@ -161,6 +257,7 @@ void PW_Basis::get_ig2isz_is2fftixy(
     {
         delete[] this->ig2isz; this->ig2isz = nullptr; // map ig to the z coordinate of this planewave.
         delete[] this->is2fftixy; this->is2fftixy = nullptr; // map is (index of sticks) to ixy (iy + ix * fftny).
+        this->invalidate_cache();
 #if defined(__CUDA) || defined(__ROCM)
         if (this->device == "gpu") {
             delmem_int_op()(this->d_is2fftixy);
@@ -226,6 +323,7 @@ void PW_Basis::get_ig2isz_is2fftixy(
         syncmem_int_h2d_op()(ig2ixyz_gpu, ig2ixyz.data(), this->npw);
     }
 #endif
+    this->invalidate_cache();
     return;
 }
 } // namespace ModulePW

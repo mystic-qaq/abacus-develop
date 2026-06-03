@@ -27,3 +27,5 @@ toolchain/install/
 toolchain/abacus_env.sh
 .trae
 compile_commands.json
+
+skill/
