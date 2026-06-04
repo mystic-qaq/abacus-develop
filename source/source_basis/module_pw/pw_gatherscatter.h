@@ -1,4 +1,5 @@
 #include "pw_basis.h"
+#include "pw_simd_copy.h"
 #include "source_base/global_function.h"
 #include "source_base/timer.h"
 #include <typeinfo>
@@ -31,15 +32,9 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
             int ixy = istot2ixy_[is];
             std::complex<T> *outp = &out[is*nz_];
             std::complex<T> *inp = &in[ixy*nz_];
-            T* __restrict__ outp_r = reinterpret_cast<T*>(outp);
-            const T* __restrict__ inp_r = reinterpret_cast<const T*>(inp);
-#ifdef __GNUC__
-#pragma GCC ivdep
-#endif
-            for(int iz = 0 ; iz < 2 * nz_ ; ++iz)
-            {
-                outp_r[iz] = inp_r[iz];
-            }
+            ModulePW::simd_copy_n(reinterpret_cast<T*>(outp),
+                                  reinterpret_cast<const T*>(inp),
+                                  2 * nz_);
         }
         ModuleBase::timer::end(this->classname, "gatherp_scatters");
         return;
@@ -76,15 +71,9 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
             int ixy = istot2ixy_gps[istot];
             std::complex<T> *outp = &sendbuf[istot * nplane_gps];
             std::complex<T> *inp = &in[ixy * nplane_gps];
-            T* __restrict__ outp_r = reinterpret_cast<T*>(outp);
-            const T* __restrict__ inp_r = reinterpret_cast<const T*>(inp);
-#ifdef __GNUC__
-#pragma GCC ivdep
-#endif
-            for (int iz = 0; iz < 2 * nplane_gps; ++iz)
-            {
-                outp_r[iz] = inp_r[iz];
-            }
+            ModulePW::simd_copy_n(reinterpret_cast<T*>(outp),
+                                  reinterpret_cast<const T*>(inp),
+                                  2 * nplane_gps);
         }
     }
     ModuleBase::timer::end(this->classname, "gatherp_pack");
@@ -104,10 +93,14 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
     {
         ModuleBase::WARNING_QUIT("PW_Basis::gatherp_scatters", "Unsupported data type for MPI gather/scatter");
     }
-    std::vector<MPI_Request> recv_requests(poolnproc_gps, MPI_REQUEST_NULL);
-    std::vector<MPI_Request> send_requests(poolnproc_gps, MPI_REQUEST_NULL);
-    std::vector<MPI_Status> recv_status(poolnproc_gps);
-    std::vector<int> recv_indices(poolnproc_gps, MPI_UNDEFINED);
+    static thread_local std::vector<MPI_Request> recv_requests;
+    static thread_local std::vector<MPI_Request> send_requests;
+    static thread_local std::vector<MPI_Status> recv_status;
+    static thread_local std::vector<int> recv_indices;
+    recv_requests.assign(poolnproc_gps, MPI_REQUEST_NULL);
+    send_requests.assign(poolnproc_gps, MPI_REQUEST_NULL);
+    recv_status.resize(poolnproc_gps);
+    recv_indices.assign(poolnproc_gps, MPI_UNDEFINED);
     int active_recvs = 0;
     int active_sends = 0;
 
@@ -147,15 +140,9 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
         {
             std::complex<T> *outp = &out[is * nz_gps + startz_gps[ip]];
             std::complex<T> *inp = &recvbuf[startg_gps[ip] + is * nzip];
-            T* __restrict__ outp_r = reinterpret_cast<T*>(outp);
-            const T* __restrict__ inp_r = reinterpret_cast<const T*>(inp);
-#ifdef __GNUC__
-#pragma GCC ivdep
-#endif
-            for (int izip = 0; izip < 2 * nzip; ++izip)
-            {
-                outp_r[izip] = inp_r[izip];
-            }
+            ModulePW::simd_copy_n(reinterpret_cast<T*>(outp),
+                                  reinterpret_cast<const T*>(inp),
+                                  2 * nzip);
         }
     };
 
@@ -237,15 +224,9 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
             int ixy = istot2ixy_[is];
             std::complex<T> *outp = &out[ixy*nz_];
             std::complex<T> *inp = &in[is*nz_];
-            T* __restrict__ outp_r = reinterpret_cast<T*>(outp);
-            const T* __restrict__ inp_r = reinterpret_cast<const T*>(inp);
-#ifdef __GNUC__
-#pragma GCC ivdep
-#endif
-            for(int iz = 0 ; iz < 2 * nz_ ; ++iz)
-            {
-                outp_r[iz] = inp_r[iz];
-            }
+            ModulePW::simd_copy_n(reinterpret_cast<T*>(outp),
+                                  reinterpret_cast<const T*>(inp),
+                                  2 * nz_);
         }
         ModuleBase::timer::end(this->classname, "gathers_scatterp");
         return;
@@ -282,15 +263,9 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
             std::complex<T> *inp0 = &in[startz_[ip]];
             std::complex<T> *outp = &outp0[is * nzip];
             std::complex<T> *inp = &inp0[is * nz_ ];
-            T* __restrict__ outp_r = reinterpret_cast<T*>(outp);
-            const T* __restrict__ inp_r = reinterpret_cast<const T*>(inp);
-#ifdef __GNUC__
-#pragma GCC ivdep
-#endif
-            for (int izip = 0; izip < 2 * nzip; ++izip)
-            {
-                outp_r[izip] = inp_r[izip];
-            }
+            ModulePW::simd_copy_n(reinterpret_cast<T*>(outp),
+                                  reinterpret_cast<const T*>(inp),
+                                  2 * nzip);
         }
     }
     ModuleBase::timer::end(this->classname, "gathers_pack");
@@ -310,10 +285,14 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
     {
         ModuleBase::WARNING_QUIT("PW_Basis::gathers_scatterp", "Unsupported data type for MPI gather/scatter");
     }
-    std::vector<MPI_Request> recv_requests(poolnproc_, MPI_REQUEST_NULL);
-    std::vector<MPI_Request> send_requests(poolnproc_, MPI_REQUEST_NULL);
-    std::vector<MPI_Status> recv_status(poolnproc_);
-    std::vector<int> recv_indices(poolnproc_, MPI_UNDEFINED);
+    static thread_local std::vector<MPI_Request> recv_requests;
+    static thread_local std::vector<MPI_Request> send_requests;
+    static thread_local std::vector<MPI_Status> recv_status;
+    static thread_local std::vector<int> recv_indices;
+    recv_requests.assign(poolnproc_, MPI_REQUEST_NULL);
+    send_requests.assign(poolnproc_, MPI_REQUEST_NULL);
+    recv_status.resize(poolnproc_);
+    recv_indices.assign(poolnproc_, MPI_UNDEFINED);
     int active_recvs = 0;
     int active_sends = 0;
 
@@ -352,7 +331,8 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
     //change (nplane,nstot) to (nplane fftnxy)
     const int nplane = this->nplane;
     const int* istot2ixy = this->istot2ixy;
-    std::vector<int> istot_offsets(poolnproc_, 0);
+    static thread_local std::vector<int> istot_offsets;
+    istot_offsets.assign(poolnproc_, 0);
     for (int ip = 1; ip < poolnproc_; ++ip)
     {
         istot_offsets[ip] = istot_offsets[ip - 1] + nst_per_[ip - 1];
@@ -374,15 +354,9 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
             const int ixy = istot2ixy[istot];
             std::complex<T> *outp = &out[ixy * nplane];
             std::complex<T> *inp = &recvbuf[startr_[ip] + is * nplane];
-            T* __restrict__ outp_r = reinterpret_cast<T*>(outp);
-            const T* __restrict__ inp_r = reinterpret_cast<const T*>(inp);
-#ifdef __GNUC__
-#pragma GCC ivdep
-#endif
-            for (int iz = 0; iz < 2 * nplane; ++iz)
-            {
-                outp_r[iz] = inp_r[iz];
-            }
+            ModulePW::simd_copy_n(reinterpret_cast<T*>(outp),
+                                  reinterpret_cast<const T*>(inp),
+                                  2 * nplane);
         }
     };
 

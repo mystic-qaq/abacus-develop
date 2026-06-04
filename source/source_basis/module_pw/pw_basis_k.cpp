@@ -310,7 +310,7 @@ void PW_Basis_K::collect_local_pw(const double& erf_ecut_in, const double& erf_h
         ModuleBase::timer::end(this->classname, "collect_local_pw");
         return;
     }
-    std::lock_guard<std::mutex> guard(this->cache_mutex);
+    std::lock_guard<cache_spinlock> guard(this->cache_lock);
     const bool locked_gcar_hit = this->gcar_cache_valid.load();
     const bool locked_gk2_hit = this->gk_cache_valid.load()
                                 && this->erf_ecut == erf_ecut_in

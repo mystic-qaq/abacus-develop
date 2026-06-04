@@ -94,6 +94,22 @@ class EnergyCutoffCriterion : public IPWCriterion
  * //then we can use pwtest.gg, pwtest.gdirect, pwtest.gcar, (unit in lat0^-1 or lat0^-2)
  *
  */
+/// Lightweight spinlock backed by std::atomic_flag. Satisfies BasicLockable so it
+/// works with std::lock_guard. Preferred over std::mutex for low-contention
+/// cache-initialisation paths where we want to avoid the kernel transition and do
+/// not need the mutex to be mutable (the owning methods are already non-const).
+struct cache_spinlock
+{
+    std::atomic_flag flag = ATOMIC_FLAG_INIT;
+    void lock()
+    {
+        while (flag.test_and_set(std::memory_order_acquire))
+        {
+        }
+    }
+    void unlock() { flag.clear(std::memory_order_release); }
+};
+
 class PW_Basis
 {
 
@@ -205,7 +221,7 @@ protected:
 
     std::atomic<bool> local_pw_cache_valid{false};
     std::atomic<bool> uniqgg_cache_valid{false};
-    mutable std::mutex cache_mutex;
+    cache_spinlock cache_lock;
     std::unique_ptr<double[]> gg_cache_storage;
     std::unique_ptr<ModuleBase::Vector3<double>[]> gdirect_cache_storage;
     std::unique_ptr<ModuleBase::Vector3<double>[]> gcar_cache_storage;
@@ -521,22 +537,22 @@ protected:
   std::string precision = "double"; ///< single, double, mixing
   bool double_data_ = true;         ///<  if has double data
   bool float_data_ = false;         ///< if has float data
-  mutable std::vector<std::complex<float>> comm_workbuf_float_;
-  mutable std::vector<std::complex<double>> comm_workbuf_double_;
 };
 
 template <>
 inline std::complex<float>* PW_Basis::acquire_comm_workbuf<float>(const int size) const
 {
-    this->comm_workbuf_float_.resize(size);
-    return this->comm_workbuf_float_.data();
+    static thread_local std::vector<std::complex<float>> buf;
+    buf.resize(size);
+    return buf.data();
 }
 
 template <>
 inline std::complex<double>* PW_Basis::acquire_comm_workbuf<double>(const int size) const
 {
-    this->comm_workbuf_double_.resize(size);
-    return this->comm_workbuf_double_.data();
+    static thread_local std::vector<std::complex<double>> buf;
+    buf.resize(size);
+    return buf.data();
 }
 }
 #endif // PWBASIS_H

@@ -1,6 +1,7 @@
 #include "timer.h"
 
 #include <cmath>
+#include <cstdlib>
 
 #ifdef __MPI
 #include <mpi.h>
@@ -294,6 +295,7 @@ void timer::print_all(std::ofstream &ofs, const bool check_end)
     std::vector<int> calls;
     std::vector<double> avgs;
     std::vector<double> pers;
+    const bool print_all = std::getenv("ABACUS_TIMER_PRINT_ALL") != nullptr;
     for(auto &timer_pool_order_A : timer_pool_order)
     {
         const std::string &class_name = timer_pool_order_A.first.first;
@@ -309,7 +311,7 @@ void timer::print_all(std::ofstream &ofs, const bool check_end)
         // mohan add 2025-03-09
         const double percentage_thr = 1.0;
         const double percentage = timer_one.cpu_second / timer_pool_order[0].second.cpu_second * 100;
-        if(percentage<percentage_thr)
+        if(!print_all && percentage<percentage_thr)
         {
             continue;
         }
@@ -338,7 +340,9 @@ void timer::print_all(std::ofstream &ofs, const bool check_end)
     assert(class_names.size() == pers.size());
 
     std::vector<std::string> titles = {"CLASS_NAME", "NAME", "TIME/s", "CALLS", "AVG/s", "PER/%"};
-    std::vector<std::string> formats = {"%-10s", "%-10s", "%6.2f", "%8d", "%6.2f", "%6.2f"};
+    std::vector<std::string> formats = print_all
+        ? std::vector<std::string>{"%-10s", "%-10s", "%12.6f", "%8d", "%12.6f", "%10.6f"}
+        : std::vector<std::string>{"%-10s", "%-10s", "%6.2f", "%8d", "%6.2f", "%6.2f"};
     FmtTable time_statistics(/*titles=*/titles,
                 /*nrows=*/pers.size(),
                 /*formats=*/formats,
