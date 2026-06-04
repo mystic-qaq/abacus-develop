@@ -48,7 +48,7 @@ void PW_Basis::real2recip(const std::complex<FPTYPE>* in,
     std::complex<FPTYPE>* auxr = this->fft_bundle.get_auxr_data<FPTYPE>();
     std::complex<FPTYPE>* auxg = this->fft_bundle.get_auxg_data<FPTYPE>();
     ModuleBase::timer::start(this->classname, "real2recip_copy_r");
-    detail::copy_complex_buffer_parallel(in, auxr, nrxx_);
+    copy_detail::copy_complex_buffer_parallel(in, auxr, nrxx_);
     ModuleBase::timer::end(this->classname, "real2recip_copy_r");
     this->fft_bundle.fftxyfor(auxr, auxr);
 
@@ -286,7 +286,7 @@ void PW_Basis::recip2real(const std::complex<FPTYPE>* in,
     }
     else
     {
-        detail::copy_complex_buffer_parallel(auxr, out, nrxx_);
+        copy_detail::copy_complex_buffer_parallel(auxr, out, nrxx_);
     }
     ModuleBase::timer::end(this->classname, "recip2real_copy_r");
     ModuleBase::timer::end(this->classname, "recip2real");

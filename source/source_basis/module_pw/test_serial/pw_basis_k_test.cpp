@@ -305,7 +305,7 @@ TEST_F(PWBasisKTEST, CopyComplexBufferTimerBenchmark)
 	const int count = 1 << 20;
 	const int repeats = 64;
 	std::vector<std::complex<double>> src(count);
-	std::vector<std::complex<double>> copy_n_dst(count);
+	std::vector<std::complex<double>> simd_dst(count);
 	std::vector<std::complex<double>> scalar_dst(count);
 
 	for (int i = 0; i < count; ++i)
@@ -315,13 +315,13 @@ TEST_F(PWBasisKTEST, CopyComplexBufferTimerBenchmark)
 
 	volatile double checksum = 0.0;
 
-	const auto copy_n_start = std::chrono::steady_clock::now();
+	const auto simd_start = std::chrono::steady_clock::now();
 	for (int repeat = 0; repeat < repeats; ++repeat)
 	{
-		ModulePW::detail::copy_complex_buffer(src.data(), copy_n_dst.data(), count);
-		checksum += copy_n_dst[repeat].real();
+		ModulePW::copy_detail::copy_complex_buffer(src.data(), simd_dst.data(), count);
+		checksum += simd_dst[repeat].real();
 	}
-	const auto copy_n_end = std::chrono::steady_clock::now();
+	const auto simd_end = std::chrono::steady_clock::now();
 
 	const auto scalar_start = std::chrono::steady_clock::now();
 	for (int repeat = 0; repeat < repeats; ++repeat)
@@ -334,17 +334,17 @@ TEST_F(PWBasisKTEST, CopyComplexBufferTimerBenchmark)
 	}
 	const auto scalar_end = std::chrono::steady_clock::now();
 
-	const double copy_n_time = std::chrono::duration<double>(copy_n_end - copy_n_start).count();
+	const double simd_time = std::chrono::duration<double>(simd_end - simd_start).count();
 	const double scalar_time = std::chrono::duration<double>(scalar_end - scalar_start).count();
 	const double bytes_moved = static_cast<double>(count) * sizeof(std::complex<double>) * repeats;
 	const double gib = bytes_moved / (1024.0 * 1024.0 * 1024.0);
 
-	std::cout << "PW_SIMD_TEST copy_n_helper " << copy_n_time << " s, "
-	          << gib / copy_n_time << " GiB/s\n";
+	std::cout << "PW_SIMD_TEST simd_helper " << simd_time << " s, "
+	          << gib / simd_time << " GiB/s\n";
 	std::cout << "PW_SIMD_TEST scalar_loop " << scalar_time << " s, "
 	          << gib / scalar_time << " GiB/s\n";
-	std::cout << "PW_SIMD_TEST speedup copy_n/scalar " << scalar_time / copy_n_time
+	std::cout << "PW_SIMD_TEST speedup simd/scalar " << scalar_time / simd_time
 	          << ", checksum " << checksum << "\n";
 
-	ASSERT_EQ(copy_n_dst, scalar_dst);
+	ASSERT_EQ(simd_dst, scalar_dst);
 }

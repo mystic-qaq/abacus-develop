@@ -33,7 +33,7 @@ void PW_Basis_K::real2recip(const std::complex<FPTYPE>* in,
 
     assert(this->gamma_only == false);
     auto* auxr = this->fft_bundle.get_auxr_data<FPTYPE>();
-    detail::copy_complex_buffer_parallel(in, auxr, this->nrxx);
+    copy_detail::copy_complex_buffer_parallel(in, auxr, this->nrxx);
     this->fft_bundle.fftxyfor(fft_bundle.get_auxr_data<FPTYPE>(), fft_bundle.get_auxr_data<FPTYPE>());
 
     this->gatherp_scatters(this->fft_bundle.get_auxr_data<FPTYPE>(), this->fft_bundle.get_auxg_data<FPTYPE>());
@@ -194,7 +194,7 @@ void PW_Basis_K::recip2real(const std::complex<FPTYPE>* in,
     }
     else
     {
-        detail::copy_complex_buffer_parallel(auxr, out, this->nrxx);
+        copy_detail::copy_complex_buffer_parallel(auxr, out, this->nrxx);
     }
     ModuleBase::timer::end(this->classname, "recip2real");
 }

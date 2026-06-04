@@ -34,13 +34,29 @@ endif()
                           "LIBS;DYN_LIBS;STATIC_LIBS;SOURCES;DEPENDS" ${ARGN})
     add_executable(${UT_TARGET} ${UT_SOURCES})
 
+    set(_abacus_gtest_main_target "")
+    set(_abacus_gmock_main_target "")
+    if(TARGET GTest::gtest_main)
+      set(_abacus_gtest_main_target GTest::gtest_main)
+    elseif(TARGET gtest_main)
+      set(_abacus_gtest_main_target gtest_main)
+    endif()
+    if(TARGET GTest::gmock_main)
+      set(_abacus_gmock_main_target GTest::gmock_main)
+    elseif(TARGET gmock_main)
+      set(_abacus_gmock_main_target gmock_main)
+    endif()
+    if("${_abacus_gtest_main_target}" STREQUAL "" OR "${_abacus_gmock_main_target}" STREQUAL "")
+      message(FATAL_ERROR "googletest targets are unavailable for ${UT_TARGET}")
+    endif()
+
     if(ENABLE_COVERAGE)
       add_coverage(${UT_TARGET})
     endif()
 
     # dependencies & link library
     target_link_libraries(${UT_TARGET} ${UT_LIBS} Threads::Threads
-                          GTest::gtest_main GTest::gmock_main)
+                          ${_abacus_gtest_main_target} ${_abacus_gmock_main_target})
     if(ENABLE_GOOGLEBENCH)
       target_link_libraries(
         ${UT_TARGET} benchmark::benchmark)
@@ -67,7 +83,7 @@ if(BUILD_TESTING)
   include(CTest)
   enable_testing()
   find_package(GTest HINTS /usr/local/lib/ ${GTEST_DIR})
-  if(NOT ${GTest_FOUND})
+  if(NOT GTest_FOUND)
     include(FetchContent)
     FetchContent_Declare(
       googletest

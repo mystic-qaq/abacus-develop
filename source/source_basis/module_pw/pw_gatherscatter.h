@@ -1,4 +1,5 @@
 #include "pw_basis.h"
+#include "pw_simd_copy.h"
 #include "source_base/global_function.h"
 #include "source_base/timer.h"
 #include <algorithm>
@@ -7,7 +8,7 @@
 
 namespace ModulePW
 {
-namespace detail
+namespace copy_detail
 {
 template <typename T>
 inline void copy_complex_buffer(const std::complex<T>* in, std::complex<T>* out, const int count)
@@ -17,7 +18,7 @@ inline void copy_complex_buffer(const std::complex<T>* in, std::complex<T>* out,
         return;
     }
 
-    std::copy_n(in, count, out);
+    ModulePW::simd_copy_n(reinterpret_cast<T*>(out), reinterpret_cast<const T*>(in), 2 * count);
 }
 
 // Top-level transform copies own the OpenMP parallel region; gather/scatter
@@ -37,13 +38,13 @@ inline void copy_complex_buffer_parallel(const std::complex<T>* in, std::complex
     for (int offset = 0; offset < count; offset += chunk_size)
     {
         const int chunk_count = std::min(chunk_size, count - offset);
-        std::copy_n(in + offset, chunk_count, out + offset);
+        copy_complex_buffer(in + offset, out + offset, chunk_count);
     }
 #else
     copy_complex_buffer(in, out, count);
 #endif
 }
-} // namespace detail
+} // namespace copy_detail
 
 /**
  * @brief gather planes and scatter sticks
@@ -69,9 +70,9 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
         for(int is = 0 ; is < nst_ ; ++is)
         {
             int ixy = istot2ixy_[is];
-            std::complex<T>* outp = &out[is*nz_];
-            const std::complex<T>* inp = &in[ixy*nz_];
-            detail::copy_complex_buffer(inp, outp, nz_);
+            std::complex<T> *outp = &out[is*nz_];
+            std::complex<T> *inp = &in[ixy*nz_];
+            copy_detail::copy_complex_buffer(inp, outp, nz_);
         }
         ModuleBase::timer::end(this->classname, "gatherp_copy_serial");
         ModuleBase::timer::end(this->classname, "gatherp_scatters");
@@ -107,9 +108,9 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
         for (int istot = 0; istot < nstot_gps; ++istot)
         {
             int ixy = istot2ixy_gps[istot];
-            std::complex<T>* outp = &sendbuf[istot * nplane_gps];
-            const std::complex<T>* inp = &in[ixy * nplane_gps];
-            detail::copy_complex_buffer(inp, outp, nplane_gps);
+            std::complex<T> *outp = &sendbuf[istot * nplane_gps];
+            std::complex<T> *inp = &in[ixy * nplane_gps];
+            copy_detail::copy_complex_buffer(inp, outp, nplane_gps);
         }
     }
     ModuleBase::timer::end(this->classname, "gatherp_pack");
@@ -129,10 +130,14 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
     {
         ModuleBase::WARNING_QUIT("PW_Basis::gatherp_scatters", "Unsupported data type for MPI gather/scatter");
     }
-    std::vector<MPI_Request> recv_requests(poolnproc_gps, MPI_REQUEST_NULL);
-    std::vector<MPI_Request> send_requests(poolnproc_gps, MPI_REQUEST_NULL);
-    std::vector<MPI_Status> recv_status(poolnproc_gps);
-    std::vector<int> recv_indices(poolnproc_gps, MPI_UNDEFINED);
+    static thread_local std::vector<MPI_Request> recv_requests;
+    static thread_local std::vector<MPI_Request> send_requests;
+    static thread_local std::vector<MPI_Status> recv_status;
+    static thread_local std::vector<int> recv_indices;
+    recv_requests.assign(poolnproc_gps, MPI_REQUEST_NULL);
+    send_requests.assign(poolnproc_gps, MPI_REQUEST_NULL);
+    recv_status.resize(poolnproc_gps);
+    recv_indices.assign(poolnproc_gps, MPI_UNDEFINED);
     int active_recvs = 0;
     int active_sends = 0;
 
@@ -170,9 +175,9 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
 #endif
         for (int is = 0; is < nst_gps; ++is)
         {
-            std::complex<T>* outp = &out[is * nz_gps + startz_gps[ip]];
-            const std::complex<T>* inp = &recvbuf[startg_gps[ip] + is * nzip];
-            detail::copy_complex_buffer(inp, outp, nzip);
+            std::complex<T> *outp = &out[is * nz_gps + startz_gps[ip]];
+            std::complex<T> *inp = &recvbuf[startg_gps[ip] + is * nzip];
+            copy_detail::copy_complex_buffer(inp, outp, nzip);
         }
     };
 
@@ -255,9 +260,9 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
         for(int is = 0 ; is < nst_ ; ++is)
         {
             int ixy = istot2ixy_[is];
-            std::complex<T>* outp = &out[ixy*nz_];
-            const std::complex<T>* inp = &in[is*nz_];
-            detail::copy_complex_buffer(inp, outp, nz_);
+            std::complex<T> *outp = &out[ixy*nz_];
+            std::complex<T> *inp = &in[is*nz_];
+            copy_detail::copy_complex_buffer(inp, outp, nz_);
         }
         ModuleBase::timer::end(this->classname, "gathers_copy_serial");
         ModuleBase::timer::end(this->classname, "gathers_scatterp");
@@ -293,9 +298,9 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
             int nzip = numz_[ip];
             std::complex<T> *outp0 = &sendbuf[startg_[ip]];
             std::complex<T> *inp0 = &in[startz_[ip]];
-            std::complex<T>* outp = &outp0[is * nzip];
-            const std::complex<T>* inp = &inp0[is * nz_ ];
-            detail::copy_complex_buffer(inp, outp, nzip);
+            std::complex<T> *outp = &outp0[is * nzip];
+            std::complex<T> *inp = &inp0[is * nz_ ];
+            copy_detail::copy_complex_buffer(inp, outp, nzip);
         }
     }
     ModuleBase::timer::end(this->classname, "gathers_pack");
@@ -315,10 +320,14 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
     {
         ModuleBase::WARNING_QUIT("PW_Basis::gathers_scatterp", "Unsupported data type for MPI gather/scatter");
     }
-    std::vector<MPI_Request> recv_requests(poolnproc_, MPI_REQUEST_NULL);
-    std::vector<MPI_Request> send_requests(poolnproc_, MPI_REQUEST_NULL);
-    std::vector<MPI_Status> recv_status(poolnproc_);
-    std::vector<int> recv_indices(poolnproc_, MPI_UNDEFINED);
+    static thread_local std::vector<MPI_Request> recv_requests;
+    static thread_local std::vector<MPI_Request> send_requests;
+    static thread_local std::vector<MPI_Status> recv_status;
+    static thread_local std::vector<int> recv_indices;
+    recv_requests.assign(poolnproc_, MPI_REQUEST_NULL);
+    send_requests.assign(poolnproc_, MPI_REQUEST_NULL);
+    recv_status.resize(poolnproc_);
+    recv_indices.assign(poolnproc_, MPI_UNDEFINED);
     int active_recvs = 0;
     int active_sends = 0;
 
@@ -358,7 +367,8 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
     //change (nplane,nstot) to (nplane fftnxy)
     const int nplane = this->nplane;
     const int* istot2ixy = this->istot2ixy;
-    std::vector<int> istot_offsets(poolnproc_, 0);
+    static thread_local std::vector<int> istot_offsets;
+    istot_offsets.assign(poolnproc_, 0);
     for (int ip = 1; ip < poolnproc_; ++ip)
     {
         istot_offsets[ip] = istot_offsets[ip - 1] + nst_per_[ip - 1];
@@ -378,9 +388,9 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
         {
             const int istot = istot0 + is;
             const int ixy = istot2ixy[istot];
-            std::complex<T>* outp = &out[ixy * nplane];
-            const std::complex<T>* inp = &recvbuf[startr_[ip] + is * nplane];
-            detail::copy_complex_buffer(inp, outp, nplane);
+            std::complex<T> *outp = &out[ixy * nplane];
+            std::complex<T> *inp = &recvbuf[startr_[ip] + is * nplane];
+            copy_detail::copy_complex_buffer(inp, outp, nplane);
         }
     };
 
