@@ -22,6 +22,7 @@ endif()
 
 list(APPEND objects
     pw_basis.cpp
+    gamma_compact.cpp
     pw_basis_k.cpp
     pw_basis_sup.cpp
     pw_distributeg.cpp

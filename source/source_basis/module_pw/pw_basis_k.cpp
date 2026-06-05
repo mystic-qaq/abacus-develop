@@ -18,6 +18,7 @@ PW_Basis_K::~PW_Basis_K()
 {
     delete[] kvec_d;
     delete[] kvec_c;
+    delete[] is_gamma_k;
     delete[] npwk;
     delete[] igl2isz_k;
     delete[] igl2ig_k;
@@ -82,6 +83,14 @@ void PW_Basis_K::initparameters(const bool gamma_only_in,
     if (kmaxmod > 0)
     {
         this->gamma_only = false; // if it is not the gamma point, we do not use gamma_only
+    }
+    // per-k gamma tracking: mark each k-point as Gamma if its |k| < 1e-12
+    delete[] this->is_gamma_k;
+    this->is_gamma_k = new bool[this->nks];
+    for (int ik = 0; ik < this->nks; ++ik)
+    {
+        double kmod = sqrt(this->kvec_c[ik] * this->kvec_c[ik]);
+        this->is_gamma_k[ik] = (kmod < 1e-12);
     }
     this->xprime = xprime_in;
     this->fftny = this->ny;

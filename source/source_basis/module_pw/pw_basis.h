@@ -8,6 +8,7 @@
 #include "source_base/vector3.h"
 #include <complex>
 #include "source_base/module_fft/fft_bundle.h"
+#include "gamma_compact.h"
 #include <cstring>
 #ifdef __MPI
 #include "mpi.h"
@@ -164,6 +165,7 @@ public:
 
 public:
   bool gamma_only = false; ///< only half g are used.
+  GammaCompact gamma_compact; ///< half-spectrum helper (valid when gamma_only == true)
   bool full_pw = false; ///< If set to 1, ecut will be ignored while collecting planewaves, so that all planewaves will
                         ///< be used. !! Note this parameter is not used in PW_BASIS_K !! sunliang added 2022-08-30.
   double ggecut = 0.0;  ///< Energy cut off for g^2/2 = ecutwfc(Ry)*lat0^2/4pi^2, unit in 1/lat0^2

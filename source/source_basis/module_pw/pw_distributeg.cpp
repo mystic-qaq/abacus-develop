@@ -47,7 +47,6 @@ void PW_Basis::count_pw_st(
 {
     ModuleBase::GlobalFunc::ZEROS(st_length2D, this->fftnxy);
     ModuleBase::GlobalFunc::ZEROS(st_bottom2D, this->fftnxy);
-    ModuleBase::Vector3<double> f;
 
     // determine the scaning area along x-direct, if gamma-only && xprime, only positive axis is used.
     int ix_end = int(this->nx / 2) + 1;
@@ -89,22 +88,37 @@ void PW_Basis::count_pw_st(
     this->lix = this->rix = 0;
     this->npwtot = 0;
     this->nstot = 0;
+
+    const int nx = this->nx;
+    const int ny = this->ny;
+    const int fftny = this->fftny;
+    const double ggecut = this->ggecut;
+    const bool full_pw = this->full_pw;
+    const ModuleBase::Matrix3 GGT = this->GGT;
+
+    // Thread-local accumulators for OpenMP reduction
+    int tot_npw = 0, tot_nst = 0;
+    int t_lix = ix_start, t_rix = ix_end, t_liy = iy_start, t_riy = iy_end;
+    ModuleBase::Vector3<double> f;
+
+#ifdef _OPENMP
+#pragma omp parallel reduction(+:tot_npw, tot_nst) private(f)
+{
+    // Initialize thread-local bounds: min starts large, max starts small
+    int loc_rix = ix_end, loc_lix = ix_start;
+    int loc_riy = iy_end, loc_liy = iy_start;
+#pragma omp for nowait
+#endif
     for (int ix = ix_start; ix <= ix_end; ++ix)
     {
         for (int iy = iy_start; iy <= iy_end; ++iy)
         {
             // we shift all sticks to the first quadrant in x-y plane here.
-            // (ix, iy, iz) is the direct coordinates of planewaves.
-            // x and y is the coordinates of shifted sticks in x-y plane.
-            // for example, if fftny = fftnx = 10, we will shift the stick on (-1, 2) to (9, 2),
-            // so that its index in st_length and st_bottom is 9 * 10 + 2 = 92.
             int x = ix;
             int y = iy;
-            if (x < 0) { x += this->nx;
-}
-            if (y < 0) { y += this->ny;
-}
-            int index = x * this->fftny + y;
+            if (x < 0) { x += nx; }
+            if (y < 0) { y += ny; }
+            int index = x * fftny + y;
 
             int length = 0; // number of planewave on stick (x, y).
             for (int iz = iz_start; iz <= iz_end; ++iz)
@@ -112,32 +126,45 @@ void PW_Basis::count_pw_st(
                 f.x = ix;
                 f.y = iy;
                 f.z = iz;
-                double modulus = f * (this->GGT * f);
-                if (modulus <= this->ggecut || this->full_pw)
+                double modulus = f * (GGT * f);
+                if (modulus <= ggecut || full_pw)
                 {
-                    if (length == 0) { st_bottom2D[index] = iz; // length == 0 means this point is the bottom of stick (x, y).
-}
-                    ++this->npwtot;
+                    if (length == 0) { st_bottom2D[index] = iz; }
+                    ++tot_npw;
                     ++length;
-                    if(iy < this->riy) { this->riy = iy;
-}
-                    if(iy > this->liy) { this->liy = iy;
-}
-                    if(ix < this->rix) { this->rix = ix;
-}
-                    if(ix > this->lix) { this->lix = ix;
-}
+                    if (iy < loc_riy) { loc_riy = iy; }
+                    if (iy > loc_liy) { loc_liy = iy; }
+                    if (ix < loc_rix) { loc_rix = ix; }
+                    if (ix > loc_lix) { loc_lix = ix; }
                 }
             }
             if (length > 0)
             {
                 st_length2D[index] = length;
-                ++this->nstot;
+                ++tot_nst;
             }
         }
     }
-    riy += this->ny;
-    rix += this->nx;
+#ifdef _OPENMP
+    // Merge thread-local boundary extents: min for riy/rix, max for liy/lix
+#pragma omp critical
+    {
+        if (loc_riy < t_riy) { t_riy = loc_riy; }
+        if (loc_liy > t_liy) { t_liy = loc_liy; }
+        if (loc_rix < t_rix) { t_rix = loc_rix; }
+        if (loc_lix > t_lix) { t_lix = loc_lix; }
+    }
+}
+#endif
+
+    this->npwtot = tot_npw;
+    this->nstot = tot_nst;
+    this->riy = t_riy;
+    this->liy = t_liy;
+    this->rix = t_rix;
+    this->lix = t_lix;
+    riy += ny;
+    rix += nx;
     return;
 }
 

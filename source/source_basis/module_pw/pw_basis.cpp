@@ -59,6 +59,11 @@ void PW_Basis::setuptransform()
     this->distribute_r();
     this->distribute_g();
     this->getstartgr();
+    // Initialize GammaCompact metadata if gamma_only is active
+    if (this->gamma_only)
+    {
+        this->gamma_compact.initialize(this);
+    }
     this->fft_bundle.clear();
     
     if(this->xprime)    
