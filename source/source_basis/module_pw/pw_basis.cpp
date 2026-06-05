@@ -126,8 +126,15 @@ PW_Basis::CacheStats PW_Basis::get_cache_stats() const
     stats.local_pw_misses = this->local_pw_cache_misses.load();
     stats.uniqgg_hits = this->uniqgg_cache_hits.load();
     stats.uniqgg_misses = this->uniqgg_cache_misses.load();
-    const bool has_local_pw_cache = this->local_pw_cache_valid.load() && this->npw > 0;
-    const bool has_uniqgg_cache = this->uniqgg_cache_valid.load() && this->ngg > 0;
+    const bool has_local_pw_cache = this->local_pw_cache_valid.load()
+                                    && this->npw > 0
+                                    && this->gg != nullptr
+                                    && this->gdirect != nullptr
+                                    && this->gcar != nullptr;
+    const bool has_uniqgg_cache = this->uniqgg_cache_valid.load()
+                                  && this->ngg > 0
+                                  && this->ig2igg != nullptr
+                                  && this->gg_uniq != nullptr;
     if (has_local_pw_cache)
     {
         stats.cache_bytes += sizeof(double) * this->npw;
@@ -240,14 +247,20 @@ void PW_Basis::collect_local_pw()
         return;
     }
     ModuleBase::timer::start(this->classname, "collect_local_pw");
-    if (this->local_pw_cache_valid.load())
+    if (this->local_pw_cache_valid.load()
+        && this->gg != nullptr
+        && this->gdirect != nullptr
+        && this->gcar != nullptr)
     {
         this->local_pw_cache_hits.fetch_add(1);
         ModuleBase::timer::end(this->classname, "collect_local_pw");
         return;
     }
     std::lock_guard<cache_spinlock> guard(this->cache_lock);
-    if (this->local_pw_cache_valid.load())
+    if (this->local_pw_cache_valid.load()
+        && this->gg != nullptr
+        && this->gdirect != nullptr
+        && this->gcar != nullptr)
     {
         this->local_pw_cache_hits.fetch_add(1);
         ModuleBase::timer::end(this->classname, "collect_local_pw");
@@ -261,6 +274,7 @@ void PW_Basis::collect_local_pw()
     this->gg = this->gg_cache_storage.get();
     this->gdirect = this->gdirect_cache_storage.get();
     this->gcar = this->gcar_cache_storage.get();
+    // Unique-G data depends on gg, so rebuilding local G data invalidates it.
     this->uniqgg_cache_valid.store(false);
 
     ModuleBase::Vector3<double> f;
@@ -319,14 +333,18 @@ void PW_Basis::collect_uniqgg()
         return;
     }
     ModuleBase::timer::start(this->classname, "collect_uniqgg");
-    if (this->uniqgg_cache_valid.load())
+    if (this->uniqgg_cache_valid.load()
+        && this->ig2igg != nullptr
+        && this->gg_uniq != nullptr)
     {
         this->uniqgg_cache_hits.fetch_add(1);
         ModuleBase::timer::end(this->classname, "collect_uniqgg");
         return;
     }
     std::lock_guard<cache_spinlock> guard(this->cache_lock);
-    if (this->uniqgg_cache_valid.load())
+    if (this->uniqgg_cache_valid.load()
+        && this->ig2igg != nullptr
+        && this->gg_uniq != nullptr)
     {
         this->uniqgg_cache_hits.fetch_add(1);
         ModuleBase::timer::end(this->classname, "collect_uniqgg");
@@ -340,6 +358,7 @@ void PW_Basis::collect_uniqgg()
     std::vector<int> sortindex(this->npw); // Reconstruct the plane-wave index mapping after sorting by energy.
     std::vector<double> tmpgg(this->npw);
     std::vector<double> tmpgg2(this->npw);
+    // Reuse gg when collect_local_pw has already built the same G^2 values.
     if (this->local_pw_cache_valid.load() && this->gg != nullptr)
     {
         for(int ig = 0 ; ig < this-> npw ; ++ig)

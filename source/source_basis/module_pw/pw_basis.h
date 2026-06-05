@@ -126,6 +126,7 @@ public:
     std::string classname;
     PW_Basis();
     PW_Basis(const PW_Basis& other);
+    PW_Basis& operator=(const PW_Basis& other) = delete;
     PW_Basis(std::string device_, std::string precision_);
     virtual ~PW_Basis();
     //Init mpi parameters
@@ -213,8 +214,17 @@ protected:
 
     virtual void invalidate_cache()
     {
+        // The public G-data pointers are non-owning views of the owned cache
+        // buffers below.  Invalidating must clear both flags and views so stale
+        // callers cannot observe old geometry through a still-nonnull pointer.
         this->local_pw_cache_valid.store(false);
         this->uniqgg_cache_valid.store(false);
+        this->gg = nullptr;
+        this->gdirect = nullptr;
+        this->gcar = nullptr;
+        this->ig2igg = nullptr;
+        this->gg_uniq = nullptr;
+        this->ig_gge0 = -1;
     }
 
     void clear_owned_cache();
@@ -222,6 +232,8 @@ protected:
     std::atomic<bool> local_pw_cache_valid{false};
     std::atomic<bool> uniqgg_cache_valid{false};
     cache_spinlock cache_lock;
+    // These buffers own gg/gdirect/gcar and ig2igg/gg_uniq after collection.
+    // The public raw pointers above are reset to their .get() values on rebuild.
     std::unique_ptr<double[]> gg_cache_storage;
     std::unique_ptr<ModuleBase::Vector3<double>[]> gdirect_cache_storage;
     std::unique_ptr<ModuleBase::Vector3<double>[]> gcar_cache_storage;
