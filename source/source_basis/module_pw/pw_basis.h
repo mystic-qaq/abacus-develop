@@ -450,7 +450,7 @@ protected:
 }
 
 template <>
-inline std::complex<float>* PW_Basis::acquire_comm_workbuf<float>(const int size) const
+inline std::complex<float>* ModulePW::PW_Basis::acquire_comm_workbuf<float>(const int size) const
 {
     static thread_local std::vector<std::complex<float>> buf;
     buf.resize(size);
@@ -458,7 +458,7 @@ inline std::complex<float>* PW_Basis::acquire_comm_workbuf<float>(const int size
 }
 
 template <>
-inline std::complex<double>* PW_Basis::acquire_comm_workbuf<double>(const int size) const
+inline std::complex<double>* ModulePW::PW_Basis::acquire_comm_workbuf<double>(const int size) const
 {
     static thread_local std::vector<std::complex<double>> buf;
     buf.resize(size);
