@@ -1,6 +1,6 @@
-# WorkflowB 优化记录
+# WorkflowB 再优化记录
 
-> **编写日期**：2026-06-03（初版），2026-06-06（更新）
+> **编写日期**：2026-06-03（一改），2026-06-06（二改）
 
 ---
 
@@ -14,14 +14,14 @@
 | 独立 sendbuf/recvbuf | ✅ 已完成 | 通过 `acquire_comm_workbuf<T>()` 提供，生命周期与输入/输出解耦 |
 | 向量化 pack/unpack | ✅ 已完成 | `reinterpret_cast` + `__restrict__` + `#pragma GCC ivdep`，生成 SIMD 友好的循环 |
 | 局部平面波缓存 | ✅ 已完成 | `collect_local_pw` / `collect_uniqgg` 带 hit/miss 统计与 atomic 线程安全 |
-| 工作缓冲区管理 | ✅ 已完成 | `thread_local` vector，线程安全、无 mutable |
-| 缓存锁机制 | ✅ 已完成 | 基于 `std::atomic_flag` 的轻量级 spinlock，无 mutable |
+| 工作缓冲区管理 | ✅ 已完成 | `thread_local` vector，线程安全、无 mutable 关键字|
+| 缓存锁机制 | ✅ 已完成 | 基于 `std::atomic_flag` 的轻量级 spinlock，去除了老师不希望看到的 mutable 关键字 |
 | FFT 计时覆盖 | ✅ 已完成 | pack / alltoallv / unpack 各阶段均有 `ModuleBase::timer` 计时点 |
 | 正确性验证框架 | ✅ 已完成 | `test_comm_roundtrip`、`test_transform_omp`、`test_count_pw_st` |
 
 ---
 
-## 二、第三轮优化（2026-06-06）：pw_gatherscatter.h 内核重构
+## 二、第三轮优化：pw_gatherscatter.h 内核重构
 
 > 本轮优化聚焦于 `pw_gatherscatter.h` 中 `gatherp_scatters` 和 `gathers_scatterp` 两个核心通信模板函数，在保持外部接口和数值语义不变的前提下，消除冗余数据搬移、优化调度策略、减少运行时开销。
 
@@ -127,9 +127,9 @@ for (int ip = 0; ip < poolnproc_; ++ip) {
 
 ---
 
-## 三、短中期可推进的方向（按优先级排序）
+## 三、可推进的方向
 
-### 3.1 Stick-Block 双缓冲流水线（优先级：高）
+### 3.1 Stick-Block 双缓冲流水线
 
 **当前状态**：非阻塞 MPI 已经让通信与 unpack 重叠，但 z 方向 FFT（`fftzfor` / `fftzbac`）仍然需要等**本进程全部 stick** 的完整 z 数据就绪才能开始。这意味着通信未完全结束前，FFT 计算单元是空闲的。
 
@@ -162,7 +162,7 @@ for (int ip = 0; ip < poolnproc_; ++ip) {
 
 ---
 
-### 3.2 NUMA 感知的缓冲区放置（优先级：高）
+### 3.2 NUMA 感知的缓冲区放置
 
 **当前状态**：`acquire_comm_workbuf` 使用 `thread_local std::vector`，由 CRT 默认内存分配器管理。在多 socket 系统上，通信缓冲区可能被分配到远离 NIC 的 NUMA 节点，导致 MPI 传输时额外跨 socket 流量。
 
@@ -177,7 +177,7 @@ for (int ip = 0; ip < poolnproc_; ++ip) {
 
 ---
 
-### 3.3 MPI 进展引擎集成（优先级：中）
+### 3.3 MPI 进展引擎集成
 
 **当前状态**：WorkflowB 使用轮询式 `MPI_Waitsome` 循环来推动 MPI 进展。这依赖于应用代码频繁进入 MPI 调用。如果 unpack 计算量很大，可能长时间不进入 MPI 进展。
 
@@ -192,7 +192,7 @@ for (int ip = 0; ip < poolnproc_; ++ip) {
 
 ---
 
-### 3.4 自适应通信策略选择（优先级：中）
+### 3.4 自适应通信策略选择
 
 **当前状态**：WorkflowB 固定使用点对点 `MPI_Isend` / `MPI_Irecv`。这不是在所有场景下都最优：
 - 消息非常小时：集合通信 `MPI_Ialltoallv` 的内部实现可能更高效（减少软件调度开销）
@@ -237,7 +237,7 @@ for (int ip = 0; ip < poolnproc_; ++ip) {
 
 ---
 
-## 四、长期的战略方向
+## 四、长期方向
 
 ### 4.1 FFT 全流水线重构
 
@@ -282,7 +282,7 @@ for (int ip = 0; ip < poolnproc_; ++ip) {
 
 ---
 
-## 五、不需要立即做但值得记录的想法
+## 五、值得记录的想法
 
 1. **MPI 错误恢复**：当前 `WARNING_QUIT` 遇到不支持的类型直接退出。可以改为 fallback 到阻塞 `MPI_Alltoallv`，确保即使编译配置异常也能正确运行（牺牲性能但不牺牲正确性）。
 
@@ -314,7 +314,7 @@ for (int ip = 0; ip < poolnproc_; ++ip) {
 
 ## 七、结论
 
-WorkflowB 当前已经达到了一个很好的阶段性成果：非阻塞通信、向量化 pack/unpack、缓存复用、线程安全的内存管理、自数据直通优化、编译期类型分发都已就位。**接下来的最大性能收益机会是 stick-block 双缓冲流水线（3.1）和 NUMA 感知优化（3.2）**。建议优先在这两个方向投入，验证收益后再逐步推进自适应通信策略和显式 SIMD。
+WorkflowB 当前已经达到了一个很好的阶段性成果：非阻塞通信、向量化 pack/unpack、缓存复用、线程安全的内存管理、自数据直通优化、编译期类型分发都已就位。**接下来的最大性能收益机会是 stick-block 双缓冲流水线和 NUMA 感知优化**。
 
 所有上述方向的实现都应该遵循一个原则：**先建立正确的性能基线，再进行优化改造，每次改动都通过正确性回归测试**。这样可以确保优化不是以牺牲正确性为代价的。
 
@@ -326,4 +326,8 @@ WorkflowB 当前已经达到了一个很好的阶段性成果：非阻塞通信�
 | --- | --- | --- | --- |
 | 第一轮 | 2026-05 | 非阻塞 MPI（Isend/Irecv + Waitsome）、独立 sendbuf/recvbuf、thread_local workbuf | `pw_gatherscatter.h`、`pw_basis.h` |
 | 第二轮 | 2026-05/06 | SIMD copy intrinsics（`pw_simd_copy.h`）、thread_local MPI request 池化、线程亲和性（`thread_affinity.h`）、与 collaborate 分支同步消除 mutable | `pw_simd_copy.h`、`thread_affinity.h`、`pw_gatherscatter.h`、`pw_basis.h` |
-| **第三轮** | **2026-06-06** | **自数据直通路径、编译期 MPI 类型分发、消除 istot_offsets 冗余计算、pack 循环调度优化、显式 schedule(static)** | **`pw_gatherscatter.h`** |
+| 第三轮 | 2026-06-06* | 自数据直通路径、编译期 MPI 类型分发、消除 istot_offsets 冗余计算、pack 循环调度优化、显式 schedule(static) | `pw_gatherscatter.h` |
+
+## AI 使用感想
+
+这一轮中，由于我周末出差，因此决定给 AI 最高权限，要求其“大胆修改”。结果在验收成果时，发现它在我服务器的`/home`目录下错误执行了`rm -rf`,让我的所有 non-hiding 文件全部删除一空。因此，我决定把`rm -rf`写进 deny 指令中，并且之后对 Agent 的每个指令都亲自检查。
