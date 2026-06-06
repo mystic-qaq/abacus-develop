@@ -1,8 +1,6 @@
-# WorkflowB 后续优化方向思考
+# WorkflowB 优化记录
 
-> **当前状态**：WorkflowB 分支已完成与 `collaborate` 分支的同步，并消除了所有 `mutable` 关键字。以下内容记录在完成这些工作之后，对 WorkflowB 后续可以做什么的分析与建议，供决策参考。
->
-> **编写日期**：2026-06-03
+> **编写日期**：2026-06-03（初版），2026-06-06（更新）
 
 ---
 
@@ -23,9 +21,115 @@
 
 ---
 
-## 二、短中期可推进的方向（按优先级排序）
+## 二、第三轮优化（2026-06-06）：pw_gatherscatter.h 内核重构
 
-### 2.1 Stick-Block 双缓冲流水线（优先级：高）
+> 本轮优化聚焦于 `pw_gatherscatter.h` 中 `gatherp_scatters` 和 `gathers_scatterp` 两个核心通信模板函数，在保持外部接口和数值语义不变的前提下，消除冗余数据搬移、优化调度策略、减少运行时开销。
+
+### 2.1 自数据直通路径（self-data direct path）
+
+**问题**：两个通信函数在处理本 rank 自身数据时，存在 `in → sendbuf → recvbuf → out` 的三重冗余拷贝链路。本 rank 的 stick（gatherp）或 z-plane（gathers）数据既不通过 MPI 发送也不通过 MPI 接收，但旧实现仍然将其完整 pack 到 sendbuf、再本地拷贝到 recvbuf、最后 unpack 到 out。
+
+**修改**：
+
+- `gatherp_scatters`：
+  - pack 循环中跳过本 rank 拥有的 stick（`istot ∈ [self_istot_beg, self_istot_end)`），不再写入 sendbuf
+  - 本 rank 数据改用一次 `simd_copy_n` 直接从 `in` 拷贝到 `out`（代替原来的 sendbuf 本地拷贝 + recvbuf unpack）
+- `gathers_scatterp`：
+  - pack 循环中跳过 `ip == poolrank`（`#pragma omp parallel for schedule(dynamic,1)` 外层并行，内层检查 `if (ip == poolrank_) continue`）
+  - 本 rank 数据改用一次 `simd_copy_n` 直接从 `in` 拷贝到 `out`
+
+**收益**：每次调用节省 `2 × nst × nplane` 个 complex 元素的冗余拷贝。对于 `PW_Basis_K`（大场景），pack+unpack 占总时间约 23%，此项在其中减少约 1/3 的数据搬移量。对于 `PW_Basis_Sup`（小场景），pack+unpack 占总时间约 50%，收益更显著。
+
+**正确性保证**：自数据在 sendbuf 中占据的位置（`startr[poolrank] .. startr[poolrank]+numr[poolrank]-1` 或 `startg[poolrank] .. startg[poolrank]+numg[poolrank]-1`）仅用于本地拷贝，不被任何 MPI 发送或接收操作引用，跳过填充不会影响其他 peer 的通信正确性。
+
+### 2.2 编译期 MPI 类型分发
+
+**问题**：两个函数在每次调用时使用 `typeid(T)` 运行时 RTTI 查询来确定 MPI 数据类型（`MPI_DOUBLE_COMPLEX` 或 `MPI_COMPLEX`）。
+
+**修改**：新增 `detail::mpi_complex_dtype<T>()` 模板函数：
+```cpp
+template <typename T> inline MPI_Datatype mpi_complex_dtype();     // fallback
+template <> inline MPI_Datatype mpi_complex_dtype<double>();       // → MPI_DOUBLE_COMPLEX
+template <> inline MPI_Datatype mpi_complex_dtype<float>();        // → MPI_COMPLEX
+```
+调用点配合 `static_assert` 确保仅 `float`/`double` 可通过编译。整个 `detail` 命名空间包裹在 `#ifdef __MPI` 中，确保串行构建兼容。
+
+**收益**：消除每次调用的 RTTI 查询开销；不支持的模板参数在编译期即被拦截（比原来的运行时 `WARNING_QUIT` 更强）。
+
+### 2.3 消除冗余 `istot_offsets` 计算
+
+**问题**：`gathers_scatterp` 中 `unpack_peer` lambda 需要知道每个 peer 在全局 stick 序列中的起始偏移 `istot0`。旧实现每次调用时计算完整的前缀和：
+```cpp
+static thread_local std::vector<int> istot_offsets;
+istot_offsets.assign(poolnproc_, 0);
+for (int ip = 1; ip < poolnproc_; ++ip)
+    istot_offsets[ip] = istot_offsets[ip - 1] + nst_per_[ip - 1];
+```
+
+**修改**：利用恒等式 `istot_offsets[ip] = startr[ip] / nplane`（因为 `startr[ip] = sum(nst_per[0..ip-1]) × nplane`），直接在 `unpack_peer` 内计算：
+```cpp
+const int istot0 = startr_[ip] / nplane;
+```
+
+当 `nplane == 0` 时 `unpack_peer` 提前返回（`peer_nst == 0 || nplane == 0`），不会触发除零。
+
+**收益**：消除一个 `thread_local std::vector<int>` 及其每次调用的 `assign` + 前缀和循环。
+
+### 2.4 `gathers_scatterp` pack 循环优化
+
+**问题**：旧 pack 循环使用 `#pragma omp parallel for collapse(2)` 合并 `ip` 和 `is` 两层循环。由于各 peer 的 `numz[ip]`（内层循环长度）差异很大，collapse 后的统一迭代空间可能导致负载不均。且某些编译器（特别是非 GCC）对 `collapse(2)` 的代码生成质量不稳定。
+
+**修改**：
+```cpp
+// 旧：collapse(2) 统一迭代空间
+#pragma omp parallel for collapse(2)
+for (int ip = 0; ip < poolnproc_; ++ip)
+    for (int is = 0; is < nst_; ++is) { ... }
+
+// 新：外层动态调度，内层串行
+#pragma omp parallel for schedule(dynamic, 1)
+for (int ip = 0; ip < poolnproc_; ++ip) {
+    if (ip == poolrank_ || numz_[ip] == 0) continue;  // 跳过本 rank
+    const int nzip = numz_[ip];
+    for (int is = 0; is < nst_; ++is) { ... }
+}
+```
+
+同时为 `inp_base`/`outp_base` 添加 `__restrict__` 限定符，帮助编译器进行别名分析和向量化。
+
+**收益**：`schedule(dynamic, 1)` 在线程数 ≤ poolnproc 时提供接近最优的负载均衡；消除 collapse 带来的编译器兼容性风险。
+
+### 2.5 显式 OpenMP `schedule(static)` 统一化
+
+**修改**：所有 pack/unpack 并行循环统一使用 `schedule(static)`（替代默认调度策略），包括：
+- `gatherp_scatters`：poolnproc==1 fast path、pack 循环、self-data 直通循环、`unpack_peer` lambda
+- `gathers_scatterp`：poolnproc==1 fast path、clear 循环、self-data 直通循环、`unpack_peer` lambda
+
+**收益**：消除默认调度策略的不确定性，static 调度对于规则的连续内存拷贝循环（每迭代工作量相同）是最优选择。
+
+### 2.6 修改文件清单
+
+| 文件 | 修改类型 | 说明 |
+| --- | --- | --- |
+| [pw_gatherscatter.h](source/source_basis/module_pw/pw_gatherscatter.h) | 重写 | 所有上述五项优化 |
+| `<typeinfo>` → `<type_traits>` | 头文件替换 | 配合编译期 MPI 类型分发 |
+| `in[] will be changed` 注释 | 更新 | 改为 `in[] is read-only`（非阻塞路径有专用 sendbuf/recvbuf） |
+
+### 2.7 正确性验证
+
+| 测试 | 配置 | 结果 |
+| --- | --- | --- |
+| `MODULE_PW_pw_test` | 串行 | ✅ 60/61 passed（1 intentionally skipped） |
+| `MODULE_PW_pw_test_parallel` | MPI, np 自动 | ✅ 60/61 passed |
+| `*comm_roundtrip*` | np=1,2,4 | ✅ 全部通过 |
+| `*transform_omp*` | 多线程 | ✅ 通过 |
+| `abacus_basic_para` 完整构建 | - | ✅ 编译成功 |
+
+---
+
+## 三、短中期可推进的方向（按优先级排序）
+
+### 3.1 Stick-Block 双缓冲流水线（优先级：高）
 
 **当前状态**：非阻塞 MPI 已经让通信与 unpack 重叠，但 z 方向 FFT（`fftzfor` / `fftzbac`）仍然需要等**本进程全部 stick** 的完整 z 数据就绪才能开始。这意味着通信未完全结束前，FFT 计算单元是空闲的。
 
@@ -58,7 +162,7 @@
 
 ---
 
-### 2.2 NUMA 感知的缓冲区放置（优先级：高）
+### 3.2 NUMA 感知的缓冲区放置（优先级：高）
 
 **当前状态**：`acquire_comm_workbuf` 使用 `thread_local std::vector`，由 CRT 默认内存分配器管理。在多 socket 系统上，通信缓冲区可能被分配到远离 NIC 的 NUMA 节点，导致 MPI 传输时额外跨 socket 流量。
 
@@ -73,7 +177,7 @@
 
 ---
 
-### 2.3 MPI 进展引擎集成（优先级：中）
+### 3.3 MPI 进展引擎集成（优先级：中）
 
 **当前状态**：WorkflowB 使用轮询式 `MPI_Waitsome` 循环来推动 MPI 进展。这依赖于应用代码频繁进入 MPI 调用。如果 unpack 计算量很大，可能长时间不进入 MPI 进展。
 
@@ -88,7 +192,7 @@
 
 ---
 
-### 2.4 自适应通信策略选择（优先级：中）
+### 3.4 自适应通信策略选择（优先级：中）
 
 **当前状态**：WorkflowB 固定使用点对点 `MPI_Isend` / `MPI_Irecv`。这不是在所有场景下都最优：
 - 消息非常小时：集合通信 `MPI_Ialltoallv` 的内部实现可能更高效（减少软件调度开销）
@@ -110,28 +214,15 @@
 
 ---
 
-### 2.5 显式 SIMD 加速 pack/unpack（优先级：中）
+### 3.5 显式 SIMD 加速 pack/unpack（优先级：中）
 
-**当前状态**：vectorization 完全依赖编译器的自动向量化（通过 `reinterpret_cast` + `#pragma GCC ivdep` 提示）。这在 GCC 上通常有效，但：
-- 对于已知为 2 的幂的 `nz` / `nplane`（常见于 FFT 网格），显式 SIMD 可使用对齐加载/存储
-- 编译器自动向量化受 `-O2` / `-O3` 影响，结果不够确定
-- `ivdep` 在某些编译器版本上可能被忽略
-
-**改进方向**：
-- 为最常见的 `nz` 和 `nplane` 值提供手工 unroll + SIMD intrinsic (AVX2/AVX-512) 的 fast path
-- 使用编译期检测（`#ifdef __AVX2__`）选择实现
-- 保留当前编译器自动向量化路径作为 fallback
+**当前状态**：已完成。参见 `pw_simd_copy.h`——架构检测式 SIMD memcpy（AVX-512 / AVX2 / 标量 fallback），在第二轮优化中实现。
 
 **收益预估**：pack/unpack 阶段吞吐量提升 1.5-2×（对于 `nz` 为 2 的幂的场景）。
 
-**风险**：
-- 增加代码量和维护负担
-- AVX-512 在某些 CPU 上会降频（需要运行时选择）
-- 需要对不同数据类型（float/double）分别实现
-
 ---
 
-### 2.6 GPU-Aware MPI 路径（优先级：中）
+### 3.6 GPU-Aware MPI 路径（优先级：中）
 
 **当前状态**：GPU 路径（CUDA/ROCm）中，FFT 在 GPU 上执行，但 gather/scatter 通信使用的是 CPU 上的 `PW_Basis` 路径。这意味着每次通信前需要 GPU→CPU 拷贝、通信后 CPU→GPU 拷贝。
 
@@ -146,9 +237,9 @@
 
 ---
 
-## 三、长期的战略方向
+## 四、长期的战略方向
 
-### 3.1 FFT 全流水线重构
+### 4.1 FFT 全流水线重构
 
 理想情况下，整个 3D FFT 变换应该被组织成流水线：
 
@@ -169,7 +260,7 @@
 
 ---
 
-### 3.2 性能模型与自动调优
+### 4.2 性能模型与自动调优
 
 建立 WorkflowB 通信路径的性能模型，根据输入参数（`nst`、`nz`、`nplane`、`poolnproc`、消息大小）预测最优配置：
 
@@ -182,7 +273,7 @@
 
 ---
 
-### 3.3 缓存统计的运行时暴露
+### 4.3 缓存统计的运行时暴露
 
 当前 `CacheStats`（hit/miss/bytes）已经统计完成但缺少暴露渠道。可以：
 - 通过 `GlobalV` 或日志系统定期输出缓存命中率
@@ -191,13 +282,13 @@
 
 ---
 
-## 四、不需要立即做但值得记录的想法
+## 五、不需要立即做但值得记录的想法
 
 1. **MPI 错误恢复**：当前 `WARNING_QUIT` 遇到不支持的类型直接退出。可以改为 fallback 到阻塞 `MPI_Alltoallv`，确保即使编译配置异常也能正确运行（牺牲性能但不牺牲正确性）。
 
 2. **消息合并**：`gatherp_scatters` 和 `gathers_scatterp` 连续调用时（如在 `real2recip` 后紧跟 `recip2real`），考虑 buffer 复用避免重复分配。
 
-3. **CPU 亲和性绑定**：在 OpenMP 并行区域前后，显式绑定线程到连续的 core，提高 pack/unpack 的缓存局部性。
+3. **CPU 亲和性绑定**：在 OpenMP 并行区域前后，显式绑定线程到连续的 core，提高 pack/unpack 的缓存局部性。此功能已在 `thread_affinity.h` 中实现（`pin_thread_to_core` / `pin_all_omp_threads`），但尚未在 `pw_gatherscatter.h` 中主动调用。
 
 4. **FFTW wisdom 持久化**：FFT plan 的创建成本很高，但当前每次初始化都重建。可以将 wisdom 写入文件，跨运行复用。
 
@@ -207,7 +298,7 @@
 
 ---
 
-## 五、对当前实现的几点观察
+## 六、对当前实现的几点观察
 
 1. **thread_local workbuf 的选择是合理的**：在 `const` API 不变的前提下，`thread_local` 是消除 `mutable` 的最干净方案。唯一的 trade-off 是每个线程持有独立的缓冲区（内存总量 = 线程数 × 最大消息大小），但对于 HPC 场景，这通常是可以接受的。如果未来需要更精细的控制，可以考虑引入 `PW_Basis` 级别的 buffer pool。
 
@@ -217,10 +308,22 @@
 
 4. **计时覆盖已较完善**：pack / alltoallv / unpack 都有独立计时点。可以基于这些数据，在 CI 中自动生成通信时间占比报告，帮助及早发现性能退化。
 
+5. **第三轮自数据直通优化值得关注**：自数据在通信缓冲区中的位置构成天然的"死空间"（不被任何 MPI 操作引用），这处冗余在原始阻塞版本中是正确的设计（`in` 兼做 recv buffer），但在引入独立 sendbuf/recvbuf 后变成了纯粹的浪费。这个案例说明：每当引入一层新的抽象（如独立的通信缓冲区），都应该重新审视上下游的数据流是否还有简化的空间。
+
 ---
 
-## 六、结论
+## 七、结论
 
-WorkflowB 当前已经达到了一个很好的阶段性成果：非阻塞通信、向量化 pack/unpack、缓存复用、线程安全的内存管理都已就位。**接下来的最大性能收益机会是 stick-block 双缓冲流水线（2.1）和 NUMA 感知优化（2.2）**。建议优先在这两个方向投入，验证收益后再逐步推进自适应通信策略和显式 SIMD。
+WorkflowB 当前已经达到了一个很好的阶段性成果：非阻塞通信、向量化 pack/unpack、缓存复用、线程安全的内存管理、自数据直通优化、编译期类型分发都已就位。**接下来的最大性能收益机会是 stick-block 双缓冲流水线（3.1）和 NUMA 感知优化（3.2）**。建议优先在这两个方向投入，验证收益后再逐步推进自适应通信策略和显式 SIMD。
 
 所有上述方向的实现都应该遵循一个原则：**先建立正确的性能基线，再进行优化改造，每次改动都通过正确性回归测试**。这样可以确保优化不是以牺牲正确性为代价的。
+
+---
+
+## 附录：各轮次修改总览
+
+| 轮次 | 日期 | 主要修改 | 涉及文件 |
+| --- | --- | --- | --- |
+| 第一轮 | 2026-05 | 非阻塞 MPI（Isend/Irecv + Waitsome）、独立 sendbuf/recvbuf、thread_local workbuf | `pw_gatherscatter.h`、`pw_basis.h` |
+| 第二轮 | 2026-05/06 | SIMD copy intrinsics（`pw_simd_copy.h`）、thread_local MPI request 池化、线程亲和性（`thread_affinity.h`）、与 collaborate 分支同步消除 mutable | `pw_simd_copy.h`、`thread_affinity.h`、`pw_gatherscatter.h`、`pw_basis.h` |
+| **第三轮** | **2026-06-06** | **自数据直通路径、编译期 MPI 类型分发、消除 istot_offsets 冗余计算、pack 循环调度优化、显式 schedule(static)** | **`pw_gatherscatter.h`** |
