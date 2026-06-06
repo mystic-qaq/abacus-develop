@@ -1,6 +1,6 @@
 # GammaOnly 优化重构文档
 
-## 一、动机与背景
+## 一、对原来代码的理解
 
 ### 1.1 优化目标
 
@@ -30,7 +30,7 @@ $$F(-\mathbf{G}) = F^*(\mathbf{G})$$
 
 结果是：生产代码中大量 `if (rho_basis->gamma_only) fact = 2.0` 和 `if (PARAM.globalv.gamma_only_pw)` 的优化分支都是**死代码**——它们被正确编写但从未被执行。
 
-## 二、总体方案
+## 二、总体优化方案
 
 ### 2.1 设计原则
 
@@ -54,10 +54,10 @@ PW 基组 (pw_basis.h/cpp, pw_basis_k.h/cpp)
   │  └─ GammaCompact: 紧凑存储辅助层 (新增)
   ▼
 FFT 后端 (fft_cpu.cpp, fft_bundle.cpp)
-  │  r2c/c2r FFTW plan (已有，未修改)
+  │  r2c/c2r FFTW plan (已有)
   ▼
 生产算子 (vnl_pw.cpp, forces.cpp, stress_*.cpp, charge_mixing_residual.cpp)
-  │  fact=2.0 分支激活 (已有，未修改)
+  │  fact=2.0 分支激活 (已有)
 ```
 
 ## 三、具体改动
@@ -73,7 +73,7 @@ FFT 后端 (fft_cpu.cpp, fft_bundle.cpp)
 
 同时在 `read_set_globalv.cpp` 中添加 PW 分支：当 `basis_type == "pw"` 且 `gamma_only == 1` 时，设置 `gamma_only_pw = true`。这激活了所有已有的 `PARAM.globalv.gamma_only_pw` 守卫（约 15 处）。
 
-**一个 bug 修复**：`stress_loc.cpp:28` 使用 `PARAM.inp.gamma_only`（原始输入值）而非 `PARAM.globalv.gamma_only_pw`（经验证的全局标志），修改为统一使用后者。
+**bug 修复**：`stress_loc.cpp:28` 使用 `PARAM.inp.gamma_only`（原始输入值）而非 `PARAM.globalv.gamma_only_pw`（经验证的全局标志），修改为统一使用后者。
 
 ### Phase 2：激活 PW 基组初始化
 
@@ -252,7 +252,7 @@ Charge density still uses half-spectrum FFT.
 
 `count_pw_st()` 的 OpenMP 并行化在 4 线程下预期达到 3-4x 加速（取决于 G 球大小和线程数）。
 
-## 六、未来方向
+## 六、未来方向（风险较高）
 
 ### 6.1 真正的 Per-K 混合 FFT 分派
 
@@ -280,9 +280,9 @@ Charge density still uses half-spectrum FFT.
 
 在 GammaOnly 模式下，实空间数据是实数，倒空间半谱数据是复数。可以考虑对实空间使用 float、倒空间使用 double 的混合精度策略，进一步减少内存带宽。
 
-## 七、测试建议
+## 七、测试
 
-由于当前环境缺少 MPI 和 FFTW3 开发库，无法进行编译验证。建议在配置完整的机器上执行以下测试：
+需要执行以下测试：
 
 ### 7.1 编译
 ```bash
@@ -315,14 +315,5 @@ mpirun -np 4 ./abacus < gamma_only=1 的输入
 mpirun -np 4 ./abacus < gamma_only=0 的输入
 ```
 
-关注指标：
-- `npw` 数量：应减少约 50%
-- `nst` 数量：应减少约 50%
-- `real2recip` / `recip2real` timer：应明显减少
-- 总内存占用：应减少
-
 ---
 
-**最后更新**：2026-06-06
-**分支**：`GammaOnly`
-**Commit**：`af21395ea`
