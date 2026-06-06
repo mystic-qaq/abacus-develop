@@ -317,3 +317,149 @@ mpirun -np 4 ./abacus < gamma_only=0 的输入
 
 ---
 
+## 八、测试结果（2026-06-06）
+
+### 8.1 编译
+
+编译环境：Intel Xeon Platinum 8163, GCC, FFTW3, OpenMP + MPI。
+
+使用 `make -j 2`（-j 4 会 OOM）编译成功：
+```
+[100%] Built target abacus_basic_para
+```
+
+编译过程中修复了一个 include 路径问题：`pw_basis.h` 中 `#include "gamma_compact.h"` 需改为 `#include "source_basis/module_pw/gamma_compact.h"`。
+
+### 8.2 关键 Bug 修复：nmaxgr 缓冲区溢出
+
+**Bug 位置**：`pw_basis.cpp:85`
+
+**原始代码**：
+```cpp
+if(this->gamma_only)
+{
+    this->nmaxgr = (this->npw > (this->nrxx+1)/2) ? this->npw : (this->nrxx+1)/2;
+}
+```
+
+**问题**：gamma_only 模式下 `nmaxgr` 被算为 `max(npw, (nrxx+1)/2)`。但实空间数据仍然需要 `nrxx` 个复数元素的缓冲区大小。下游代码（如 `H_Hartree_pw.cpp:32`）以 `nmaxgr` 分配数组，然后写入 `nrxx` 个元素——发生数组越界写入，导致 **SIGSEGV 段错误**。
+
+**修复**：
+```cpp
+if(this->gamma_only)
+{
+    // gamma_only: real-space data still needs nrxx complex elements
+    // (each holding one real value with imag=0), while reciprocal data
+    // needs only npw elements. nmaxgr must accommodate both uses.
+    this->nmaxgr = (this->npw > this->nrxx) ? this->npw : this->nrxx;
+}
+```
+
+修复后，gamma_only=1 的所有测试不再发生段错误。
+
+### 8.3 GammaOnly 激活状态检查
+
+**关键发现**：`read_input_item_elec_stru.cpp:781` 中 `gamma_only` 的默认值为 `"0"`。**必须显式在 INPUT 文件中设置 `gamma_only 1` 才能启用半谱 FFT。** 之前的测试因为未设置此项，实际上一直在运行全谱 FFT（gamma_only=0）。
+
+通过添加调试输出确认：当 `gamma_only 1` 显式设置后，`PW_Basis::count_pw_st()` 中的 `this->gamma_only` 正确为 `true`，`fftnx` 从 24 缩减为 13。
+
+### 8.4 内存节省 — ✅ 验证通过
+
+GammaOnly 模式成功减少了 plane wave 数量，波函数内存占用显著降低：
+
+| 测试用例 | 网格 | gamma_only=0 | gamma_only=1 | 节省比例 |
+|---------|------|-------------|-------------|---------|
+| Si 2-atom ecut=20 | 24³ | 0.050 MB | 0.029 MB | **~42%** |
+| Si 2-atom ecut=60 | 36³ | 0.827 MB | 0.448 MB | **~46%** |
+
+内存节省接近理论预期的 ~50%，证明半谱 plane wave 计数（`count_pw_st()` 的 gamma_only 扫描范围限制）正确工作。
+
+### 8.5 正确性 — ❌ 严重问题
+
+**gamma_only=1 在所有求解器下均无法正确收敛：**
+
+| 求解器 | ecutwfc | gamma_only=1 最终能量 | gamma_only=0 最终能量 | 偏差 |
+|--------|--------|----------------------|----------------------|------|
+| CG | 20 | -298.96 eV (未收敛) | -196.48 eV (7 次收敛) | ~-102 eV |
+| DAV | 60 | NaN (未收敛) | -246.382 eV (7 次收敛) | NaN |
+
+注：之前的测试报告 CG 给出 +100 eV 偏差，但在本次 clean build（无任何 extra fix）中，CG 在 gamma_only=1 下给出 -298.96 eV，即比正确值低了约 102 eV（更负）。
+
+### 8.6 能量分项对比（gamma_only=1 vs gamma_only=0, ecutwfc=20, CG, 100步后）
+
+| 能量分项 | gamma_only=0 (正确) | gamma_only=1 (clean) | 偏差 |
+|---------|---------------------|---------------------|------|
+| E_band | +34.68 eV | +36.29 eV | +1.61 eV |
+| E_Hartree | +22.14 eV | +23.17 eV | +1.03 eV (~5%) |
+| E_Ewald | -229.93 eV | -324.37 eV | -94.44 eV |
+| E_xc | -68.69 eV | -93.96 eV | -25.27 eV |
+| E_localpp | -79.79 eV | -211.09 eV | -131.30 eV |
+| E_descf | 0.00 eV | +0.94 eV | +0.94 eV |
+| **E_KS** | **-196.48 eV** | **-298.96 eV** | **-102.48 eV** |
+
+### 8.7 根因分析（深入调试结果）
+
+#### 8.7.1 Hartree 能量：原始代码已经正确
+
+**关键发现**：原始 `H_Hartree_pw.cpp` 在 gamma_only 模式下**已经产生正确的 Hartree 能量**（21.79 ≈ 22.14 eV），不需要额外的 `fact=2.0` 修正。
+
+在 gamma_only 模式下尝试添加 `gamma_compact.conjugate_weight(ig)`（对非自共轭 G 乘以 2.0）会导致 Hartree 能量被**过度修正**为 43.57 eV（2x 正确值）。
+
+**结论**：r2c FFT 路径（`pw_transform.cpp` 的 `real2recip`）已经通过某种机制（可能是归一化或数据布局）使得半谱的 `|ρ(G)|² / G²` 求和结果与全谱一致。Hartree 能量不需要修正。
+
+#### 8.7.2 局部赝势能量：异常偏离表明电荷密度被破坏
+
+`E_localpp = -211.09 eV`（vs 正确值 `-79.79 eV`）的偏离最为严重。这个能量项在**实空间**计算：
+
+```
+E_localpp = Σ dot(v_fixed, rho) * omega/nxyz
+```
+
+它不涉及任何 G-space 求和或 fact=2.0 修正。因此，这个偏差**直接证明 `rho(r)` 在 gamma_only 模式下被破坏**。
+
+根本原因在于波函数 → 电荷密度的 FFT 数据路径：
+- `PW_Basis_K::recip2real()`：半谱 ψ(G) → ψ(r)
+- `|ψ(r)|² → ρ(r)`
+- `PW_Basis::real2recip()`：ρ(r) → 半谱 ρ(G)（用于后续 Hartree/XC 计算）
+
+如果 `recip2real` 产生的 ψ(r) 在实空间幅度错误，则 ρ(r) 错误，进而所有依赖于 ρ 的量（Hartree、XC、local PP）都会错误。巧合的是 Hartree 能量碰巧接近正确值，可能因为对 ρ(G) 的某些 scaling 误差被 |ρ(G)|²/G² 的非线性关系抵消。
+
+#### 8.7.3 Ewald 能量：G 球面不一致
+
+`E_Ewald = -324.37 eV`（vs 正确值 `-229.93 eV`）。Ewald 能量仅依赖于离子位置和 G 矢量列表。
+
+gamma_only 模式下 `npw = 237`（vs 全谱 `npw = 1686`）。虽然 Ewald 求和遍历的 G 矢量数量更少，但每个 canonical G 的 |S(G)|² 平均值更大（因为 canonical half 中包含了 G=0 附近的低频率分量更多）。这导致 `fact=1.0` 时的总和比预期更大。
+
+尝试用 `gamma_weight=2.0` 修正会走向错误方向（从 -324 变为 -147），说明 Ewald 的半谱求和问题不是简单的 factor-of-2。
+
+#### 8.7.4 总结：FFT 数据路径是根本原因
+
+所有证据指向 **`pw_transform.cpp` 的 gamma_only FFT 路径** 是根本原因：
+
+1. **Hartree 能量巧合正确**：原始代码已产生近似的正确值，无需修正
+2. **Local PP 能量严重错误**：实空间 ρ(r) 被破坏，根源在 FFT
+3. **Ewald 能量错误**：G 矢量列表在半谱模式下不同，需要更仔细的分析
+4. **SCF 不收敛**：错误的总能量面导致求解器无法找到正确的基态
+
+排查优先级：
+- `recip2real()` gamma_only 路径（`pw_transform.cpp:218-330`）：c2r FFT 产生的实空间波函数是否正确？
+- `fftxyc2r()`（`fft_cpu.cpp`）：c2r plan 的维度、归一化和输出布局
+- `gathers_scatterp()`：从 stick 布局到 plane 布局的 MPI 数据重分布，半谱维度（`fftnx = nx/2+1`）下是否正确？
+
+### 8.8 已尝试的修复及结果
+
+| 修复 | 文件 | 预期效果 | 实际效果 | 结论 |
+|------|------|---------|---------|------|
+| Hartree gamma_weight | H_Hartree_pw.cpp | E_H 从 ~11eV → ~22eV | E_H 从 ~22eV → ~44eV | ❌ 过度修正，已回退 |
+| Ewald gamma_weight | H_Ewald_pw.cpp | E_Ewald 从 ~-324 → ~-230 | E_Ewald 从 ~-324 → ~-147 | ❌ 方向错误，已回退 |
+| charge_mixing nspin=1 修正 | charge_mixing_residual.cpp | 改善 nspin=1 SCF 收敛 | 未独立测试 | ⚠️ 需在 FFT 修复后重测 |
+| test_serial CMakeLists | test_serial/CMakeLists.txt | 修复链接错误 | 链接成功 | ✅ 保留 |
+
+### 8.9 下一步建议
+
+1. **优先修复 FFT 数据路径**：重点调试 `pw_transform.cpp` 中 `recip2real()` 的 gamma_only 路径（line ~218-330）。添加诊断代码对比 gamma_only=0 和 gamma_only=1 下同一初始波函数的 `|ψ(r)|²` 输出
+2. **验证 r2c/c2r 归一化**：确认 `fftxyr2c`/`fftxyc2r` 在 `fftnx = nx/2+1` 维度下与 `gatherp_scatters`/`gathers_scatterp` 的数据布局一致
+3. **1-step SCF 对比**：设置 `scf_nmax=1`，使用相同的随机初始波函数，对比 gamma_only=0 和 gamma_only=1 的所有中间量（ψ(G) → ψ(r) → ρ(r) → ρ(G) → E_H, v_H）
+4. **Ewald 半谱分析**：独立分析 Ewald 能量在半谱 G 矢量集合下的正确计算公式，可能需要 per-G 的双重计数而非 uniform factor-of-2
+5. **参考 Quantum ESPRESSO**：对比 QE 的 `gamma_gamma` 实现，特别是 `fft_scatter` 在半谱维度下的处理方式
+
