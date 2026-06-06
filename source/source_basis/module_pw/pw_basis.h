@@ -8,9 +8,13 @@
 #include "source_base/vector3.h"
 #include <complex>
 #include "source_base/module_fft/fft_bundle.h"
+#include "compact_gamma_data.h"
 #include <cstring>
 #include <vector>
 #include <atomic>
+#include <map>
+#include <tuple>
+#include <vector>
 #ifdef __MPI
 #include "mpi.h"
 #endif
@@ -387,6 +391,40 @@ public:
                     std::complex<FPTYPE>* out,
                     const bool add = false,
                     const FPTYPE factor = 1.0) const; // in:(nz, ns)  ; out(nplane,nx*ny)
+
+    /**
+     * @brief Gamma-only reciprocal-to-real transform from compact reciprocal storage.
+     *
+     * The existing FFT kernels still consume dense reciprocal buffers.  This wrapper
+     * keeps the public transform semantics unchanged while allowing rho(G)/V(G)
+     * to be stored compactly between transforms and expanded only for execution.
+     */
+    template <typename FPTYPE>
+    void recip2real_compact(const CompactGammaData<FPTYPE>& in,
+                            FPTYPE* out,
+                            const bool add = false,
+                            const FPTYPE factor = 1.0) const;
+
+    template <typename FPTYPE>
+    void recip2real_compact(const CompactGammaData<FPTYPE>& in,
+                            std::complex<FPTYPE>* out,
+                            const bool add = false,
+                            const FPTYPE factor = 1.0) const;
+
+    /**
+     * @brief Real-to-reciprocal transform that returns compact Gamma-only storage.
+     */
+    template <typename FPTYPE>
+    void real2recip_compact(const FPTYPE* in,
+                            CompactGammaData<FPTYPE>& out,
+                            const bool add = false,
+                            const FPTYPE factor = 1.0) const;
+
+    template <typename FPTYPE>
+    void real2recip_compact(const std::complex<FPTYPE>* in,
+                            CompactGammaData<FPTYPE>& out,
+                            const bool add = false,
+                            const FPTYPE factor = 1.0) const;
     
     template <typename FPTYPE>
     void real2recip_gpu(const FPTYPE* in,
@@ -529,6 +567,82 @@ public:
                        {
                         this->real2recip_gpu(in,out,add,factor);
                        };
+
+    template <typename FPTYPE>
+    CompactGammaData<FPTYPE> compress_gamma_only_data(const std::complex<FPTYPE>* dense) const
+    {
+        const std::vector<int> minus_g = this->gamma_only_minus_g_map();
+        return compress_gamma_data(dense, this->npw, minus_g.empty() ? nullptr : minus_g.data());
+    }
+
+    template <typename FPTYPE>
+    void decompress_gamma_only_data(const CompactGammaData<FPTYPE>& compact, std::complex<FPTYPE>* dense) const
+    {
+        compact.decompress_to(dense);
+    }
+
+    template <typename FPTYPE>
+    std::size_t gamma_only_compact_bytes() const
+    {
+        const std::vector<int> minus_g = this->gamma_only_minus_g_map();
+        return CompactGammaData<FPTYPE>(this->npw, minus_g.empty() ? nullptr : minus_g.data()).compact_bytes();
+    }
+
+    /**
+     * @brief Whether this local Gamma-only PW basis has an explicit -G pair map.
+     *
+     * The compact storage path is enabled only when Gamma-only is active and every
+     * local G vector can be paired with its conjugate partner in the same dense
+     * reciprocal buffer.  Other cases keep using the legacy dense path.
+     */
+    bool can_use_gamma_only_compact() const
+    {
+        if (!this->gamma_only || this->npw <= 0 || this->gdirect == nullptr)
+        {
+            return false;
+        }
+        return !this->gamma_only_minus_g_map().empty();
+    }
+
+    /**
+     * @brief Build ig -> i(-G) map from ABACUS G-vector ordering.
+     *
+     * This avoids assuming that ABACUS stores conjugate pairs by linear index.
+     * Empty return means the local dense buffer cannot be represented safely by
+     * CompactGammaData and callers must fall back to dense storage.
+     */
+    std::vector<int> gamma_only_minus_g_map() const
+    {
+        std::vector<int> minus_g(this->npw, -1);
+        if (this->npw <= 0 || this->gdirect == nullptr)
+        {
+            return minus_g;
+        }
+
+        std::map<std::tuple<int, int, int>, int> index_by_g;
+        for (int ig = 0; ig < this->npw; ++ig)
+        {
+            const auto key = std::make_tuple(static_cast<int>(this->gdirect[ig].x),
+                                             static_cast<int>(this->gdirect[ig].y),
+                                             static_cast<int>(this->gdirect[ig].z));
+            index_by_g[key] = ig;
+        }
+
+        for (int ig = 0; ig < this->npw; ++ig)
+        {
+            const auto mate_key = std::make_tuple(-static_cast<int>(this->gdirect[ig].x),
+                                                  -static_cast<int>(this->gdirect[ig].y),
+                                                  -static_cast<int>(this->gdirect[ig].z));
+            const auto mate = index_by_g.find(mate_key);
+            if (mate == index_by_g.end())
+            {
+                minus_g.clear();
+                return minus_g;
+            }
+            minus_g[ig] = mate->second;
+        }
+        return minus_g;
+    }
 
   protected:
     //gather planes and scatter sticks of all processors

@@ -164,6 +164,34 @@ public:
                     const int ik,
                     const bool add = false,
                     const FPTYPE factor = 1.0) const; // in:(nz, ns)  ; out(nplane,nx*ny)
+
+    template <typename FPTYPE>
+    void recip2real_compact(const CompactGammaData<FPTYPE>& in,
+                            FPTYPE* out,
+                            const int ik,
+                            const bool add = false,
+                            const FPTYPE factor = 1.0) const;
+
+    template <typename FPTYPE>
+    void recip2real_compact(const CompactGammaData<FPTYPE>& in,
+                            std::complex<FPTYPE>* out,
+                            const int ik,
+                            const bool add = false,
+                            const FPTYPE factor = 1.0) const;
+
+    template <typename FPTYPE>
+    void real2recip_compact(const FPTYPE* in,
+                            CompactGammaData<FPTYPE>& out,
+                            const int ik,
+                            const bool add = false,
+                            const FPTYPE factor = 1.0) const;
+
+    template <typename FPTYPE>
+    void real2recip_compact(const std::complex<FPTYPE>* in,
+                            CompactGammaData<FPTYPE>& out,
+                            const int ik,
+                            const bool add = false,
+                            const FPTYPE factor = 1.0) const;
     template <typename FPTYPE>
     void recip2real(const std::complex<FPTYPE>* in,
                     std::complex<FPTYPE>* out,
@@ -279,6 +307,20 @@ public:
                        const typename GetTypeReal<TK>::type factor = 1.0) const
     {
         this->recip2real_gpu(in, out, ik, add, factor);
+    }
+
+    template <typename FPTYPE>
+    CompactGammaData<FPTYPE> compress_gamma_only_wfc(const std::complex<FPTYPE>* dense, const int ik) const
+    {
+        return compress_gamma_data(dense, this->npwk[ik]);
+    }
+
+    template <typename FPTYPE>
+    void decompress_gamma_only_wfc(const CompactGammaData<FPTYPE>& compact,
+                                   std::complex<FPTYPE>* dense,
+                                   const int /*ik*/) const //!< k-point index, unused in Gamma-only
+    {
+        compact.decompress_to(dense);
     }
 
   public:

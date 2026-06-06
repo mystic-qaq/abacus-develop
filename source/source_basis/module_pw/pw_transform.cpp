@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cassert>
 #include <complex>
+#include <vector>
 
 namespace ModulePW
 {
@@ -436,6 +437,74 @@ void PW_Basis::recip2real(const std::complex<FPTYPE>* in, FPTYPE* out, const boo
     }
     ModuleBase::timer::end(this->classname, "recip2real");
 }
+
+template <typename FPTYPE>
+void PW_Basis::recip2real_compact(const CompactGammaData<FPTYPE>& in,
+                                  FPTYPE* out,
+                                  const bool add,
+                                  const FPTYPE factor) const
+{
+    assert(this->gamma_only == true);
+    assert(in.logical_size() == this->npw);
+
+    std::vector<std::complex<FPTYPE>> dense(this->npw);
+    in.decompress_to(dense.data());
+    this->recip2real(dense.data(), out, add, factor);
+}
+
+template <typename FPTYPE>
+void PW_Basis::recip2real_compact(const CompactGammaData<FPTYPE>& in,
+                                  std::complex<FPTYPE>* out,
+                                  const bool add,
+                                  const FPTYPE factor) const
+{
+    assert(this->gamma_only == false || in.logical_size() == this->npw);
+
+    std::vector<std::complex<FPTYPE>> dense(this->npw);
+    in.decompress_to(dense.data());
+    this->recip2real(dense.data(), out, add, factor);
+}
+
+template <typename FPTYPE>
+void PW_Basis::real2recip_compact(const FPTYPE* in,
+                                  CompactGammaData<FPTYPE>& out,
+                                  const bool add,
+                                  const FPTYPE factor) const
+{
+    assert(this->gamma_only == true);
+
+    std::vector<std::complex<FPTYPE>> dense(this->npw);
+    if (add && out.logical_size() == this->npw)
+    {
+        out.decompress_to(dense.data());
+    }
+    out.reset(this->npw);
+    if (const std::vector<int> minus_g = this->gamma_only_minus_g_map(); !minus_g.empty())
+    {
+        out.reset(this->npw, minus_g.data());
+    }
+    this->real2recip(in, dense.data(), add, factor);
+    out.compress_from(dense.data());
+}
+
+template <typename FPTYPE>
+void PW_Basis::real2recip_compact(const std::complex<FPTYPE>* in,
+                                  CompactGammaData<FPTYPE>& out,
+                                  const bool add,
+                                  const FPTYPE factor) const
+{
+    assert(this->gamma_only == false);
+
+    std::vector<std::complex<FPTYPE>> dense(this->npw);
+    if (add && out.logical_size() == this->npw)
+    {
+        out.decompress_to(dense.data());
+    }
+    out.reset(this->npw);
+    this->real2recip(in, dense.data(), add, factor);
+    out.compress_from(dense.data());
+}
+
 template void PW_Basis::real2recip<float>(const float* in,
                                           std::complex<float>* out,
                                           const bool add,
@@ -469,4 +538,38 @@ template void PW_Basis::recip2real<double>(const std::complex<double>* in,
                                            std::complex<double>* out,
                                            const bool add,
                                            const double factor) const;
+
+template void PW_Basis::recip2real_compact<float>(const CompactGammaData<float>& in,
+                                                  float* out,
+                                                  const bool add,
+                                                  const float factor) const;
+template void PW_Basis::recip2real_compact<float>(const CompactGammaData<float>& in,
+                                                  std::complex<float>* out,
+                                                  const bool add,
+                                                  const float factor) const;
+template void PW_Basis::real2recip_compact<float>(const float* in,
+                                                  CompactGammaData<float>& out,
+                                                  const bool add,
+                                                  const float factor) const;
+template void PW_Basis::real2recip_compact<float>(const std::complex<float>* in,
+                                                  CompactGammaData<float>& out,
+                                                  const bool add,
+                                                  const float factor) const;
+
+template void PW_Basis::recip2real_compact<double>(const CompactGammaData<double>& in,
+                                                   double* out,
+                                                   const bool add,
+                                                   const double factor) const;
+template void PW_Basis::recip2real_compact<double>(const CompactGammaData<double>& in,
+                                                   std::complex<double>* out,
+                                                   const bool add,
+                                                   const double factor) const;
+template void PW_Basis::real2recip_compact<double>(const double* in,
+                                                   CompactGammaData<double>& out,
+                                                   const bool add,
+                                                   const double factor) const;
+template void PW_Basis::real2recip_compact<double>(const std::complex<double>* in,
+                                                   CompactGammaData<double>& out,
+                                                   const bool add,
+                                                   const double factor) const;
 } // namespace ModulePW
