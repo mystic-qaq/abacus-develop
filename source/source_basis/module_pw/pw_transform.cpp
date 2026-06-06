@@ -29,19 +29,41 @@ void PW_Basis::real2recip(const std::complex<FPTYPE>* in,
 {
     ModuleBase::timer::start(this->classname, "real2recip");
 
-    assert(this->gamma_only == false);
     const int nrxx_ = this->nrxx;
     const int npw_ = this->npw;
     const int nxyz_ = this->nxyz;
     const int* ig2isz_ = this->ig2isz;
+    const int nx_ = this->nx;
+    const int ny_ = this->ny;
+    const int nplane_ = this->nplane;
+    if (this->gamma_only)
+    {
+        // gamma_only: extract real parts from complex input, use r2c FFT path
+        const int npy = ny_ * nplane_;
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) schedule(static)
+#endif
+        for (int ix = 0; ix < nx_; ++ix)
+        {
+            for (int ipy = 0; ipy < npy; ++ipy)
+            {
+                this->fft_bundle.get_rspace_data<FPTYPE>()[ix * npy + ipy]
+                    = in[ix * npy + ipy].real();
+            }
+        }
+        this->fft_bundle.fftxyr2c(fft_bundle.get_rspace_data<FPTYPE>(), fft_bundle.get_auxr_data<FPTYPE>());
+    }
+    else
+    {
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
 #endif
-    for (int ir = 0; ir < nrxx_; ++ir)
-    {
-        this->fft_bundle.get_auxr_data<FPTYPE>()[ir] = in[ir];
+        for (int ir = 0; ir < nrxx_; ++ir)
+        {
+            this->fft_bundle.get_auxr_data<FPTYPE>()[ir] = in[ir];
+        }
+        this->fft_bundle.fftxyfor(fft_bundle.get_auxr_data<FPTYPE>(), fft_bundle.get_auxr_data<FPTYPE>());
     }
-    this->fft_bundle.fftxyfor(fft_bundle.get_auxr_data<FPTYPE>(), fft_bundle.get_auxr_data<FPTYPE>());
 
     this->gatherp_scatters(this->fft_bundle.get_auxr_data<FPTYPE>(), this->fft_bundle.get_auxg_data<FPTYPE>());
 
@@ -160,11 +182,13 @@ void PW_Basis::recip2real(const std::complex<FPTYPE>* in,
                           const FPTYPE factor) const
 {
     ModuleBase::timer::start(this->classname, "recip2real");
-    assert(this->gamma_only == false);
     const int nst_ = this->nst;
     const int nz_ = this->nz;
     const int npw_ = this->npw;
     const int nrxx_ = this->nrxx;
+    const int nx_ = this->nx;
+    const int ny_ = this->ny;
+    const int nplane_ = this->nplane;
     const int* ig2isz_ = this->ig2isz;
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
@@ -185,26 +209,63 @@ void PW_Basis::recip2real(const std::complex<FPTYPE>* in,
 
     this->gathers_scatterp(this->fft_bundle.get_auxg_data<FPTYPE>(), this->fft_bundle.get_auxr_data<FPTYPE>());
 
-    this->fft_bundle.fftxybac(fft_bundle.get_auxr_data<FPTYPE>(), this->fft_bundle.get_auxr_data<FPTYPE>());
-
-    if (add)
+    if (this->gamma_only)
     {
-#ifdef _OPENMP
-#pragma omp parallel for schedule(static)
-#endif
-        for (int ir = 0; ir < nrxx_; ++ir)
+        // gamma_only: use c2r FFT, then expand real output to complex with imag=0
+        this->fft_bundle.fftxyc2r(fft_bundle.get_auxr_data<FPTYPE>(), fft_bundle.get_rspace_data<FPTYPE>());
+
+        const int npy = ny_ * nplane_;
+        if (add)
         {
-            out[ir] += factor * this->fft_bundle.get_auxr_data<FPTYPE>()[ir];
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) schedule(static)
+#endif
+            for (int ix = 0; ix < nx_; ++ix)
+            {
+                for (int ipy = 0; ipy < npy; ++ipy)
+                {
+                    out[ix * npy + ipy] += factor
+                        * std::complex<FPTYPE>(this->fft_bundle.get_rspace_data<FPTYPE>()[ix * npy + ipy], 0.0);
+                }
+            }
+        }
+        else
+        {
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) schedule(static)
+#endif
+            for (int ix = 0; ix < nx_; ++ix)
+            {
+                for (int ipy = 0; ipy < npy; ++ipy)
+                {
+                    out[ix * npy + ipy]
+                        = std::complex<FPTYPE>(this->fft_bundle.get_rspace_data<FPTYPE>()[ix * npy + ipy], 0.0);
+                }
+            }
         }
     }
     else
     {
+        this->fft_bundle.fftxybac(fft_bundle.get_auxr_data<FPTYPE>(), fft_bundle.get_auxr_data<FPTYPE>());
+        if (add)
+        {
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
 #endif
-        for (int ir = 0; ir < nrxx_; ++ir)
+            for (int ir = 0; ir < nrxx_; ++ir)
+            {
+                out[ir] += factor * this->fft_bundle.get_auxr_data<FPTYPE>()[ir];
+            }
+        }
+        else
         {
-            out[ir] = this->fft_bundle.get_auxr_data<FPTYPE>()[ir];
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+            for (int ir = 0; ir < nrxx_; ++ir)
+            {
+                out[ir] = this->fft_bundle.get_auxr_data<FPTYPE>()[ir];
+            }
         }
     }
     ModuleBase::timer::end(this->classname, "recip2real");
