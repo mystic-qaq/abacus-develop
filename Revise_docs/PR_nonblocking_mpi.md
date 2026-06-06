@@ -1,11 +1,5 @@
 # PR: MPI_Alltoallv 的非阻塞优化（题目 2）
 
-> **分支**: `pr/nonblocking-mpi` → `upstream/develop`
-> **关联题目**: 01_plane_wave.md — 题目 2：MPI_Alltoallv 的非阻塞优化
-> **难度**: ⭐⭐⭐
-
----
-
 ## 概述
 
 将 `pw_gatherscatter.h` 中的 `gatherp_scatters` 和 `gathers_scatterp` 函数从阻塞的 `MPI_Alltoallv` 改造为**非阻塞 `MPI_Isend`/`MPI_Irecv` + `MPI_Waitsome` 进度循环**，实现通信与本地计算的 overlap。同时引入 **SIMD 加速的数据打包/解包** 和**编译期 MPI 类型分发**，消除运行时 `typeid()` 开销。
