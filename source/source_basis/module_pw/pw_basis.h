@@ -9,6 +9,7 @@
 #include <complex>
 #include "source_base/module_fft/fft_bundle.h"
 #include <cstring>
+#include <vector>
 #ifdef __MPI
 #include "mpi.h"
 #endif
@@ -420,6 +421,10 @@ public:
     template <typename T>
     void gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const;
 
+    /// @brief Acquire a thread-local work buffer for non-blocking MPI communication
+    template <typename T>
+    std::complex<T>* acquire_comm_workbuf(const int size) const;
+
   public:
     //get fftixy2is;
     void getfftixy2is(int * fftixy2is) const;
@@ -443,6 +448,23 @@ protected:
   bool float_data_ = false;         ///< if has float data
 };
 }
+
+template <>
+inline std::complex<float>* PW_Basis::acquire_comm_workbuf<float>(const int size) const
+{
+    static thread_local std::vector<std::complex<float>> buf;
+    buf.resize(size);
+    return buf.data();
+}
+
+template <>
+inline std::complex<double>* PW_Basis::acquire_comm_workbuf<double>(const int size) const
+{
+    static thread_local std::vector<std::complex<double>> buf;
+    buf.resize(size);
+    return buf.data();
+}
+
 #endif // PWBASIS_H
 #include "pw_basis_sup.h"
 #include "pw_basis_big.h" //temporary it will be removed
