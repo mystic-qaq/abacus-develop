@@ -104,22 +104,17 @@ PW_Basis:: ~PW_Basis()
 
 void PW_Basis::clear_owned_cache()
 {
-    this->invalidate_cache();
-    this->gg_cache_storage.reset();
-    this->gdirect_cache_storage.reset();
-    this->gcar_cache_storage.reset();
-    this->ig2igg_cache_storage.reset();
-    this->gg_uniq_cache_storage.reset();
-    this->gg = nullptr;
-    this->gdirect = nullptr;
-    this->gcar = nullptr;
-    this->ig2igg = nullptr;
-    this->gg_uniq = nullptr;
-    this->ngg = 0;
-    this->ig_gge0 = -1;
+    std::lock_guard<std::mutex> guard(this->cache_mutex);
+    this->invalidate_cache_unlocked();
 }
 
 PW_Basis::CacheStats PW_Basis::get_cache_stats() const
+{
+    std::lock_guard<std::mutex> guard(this->cache_mutex);
+    return this->get_cache_stats_unlocked();
+}
+
+PW_Basis::CacheStats PW_Basis::get_cache_stats_unlocked() const
 {
     CacheStats stats;
     stats.local_pw_hits = this->local_pw_cache_hits.load();
@@ -154,6 +149,42 @@ void PW_Basis::reset_cache_stats()
     this->local_pw_cache_misses.store(0);
     this->uniqgg_cache_hits.store(0);
     this->uniqgg_cache_misses.store(0);
+}
+
+PW_Basis::CacheSignature PW_Basis::make_cache_signature() const
+{
+    CacheSignature signature;
+    signature.lat0 = this->lat0;
+    signature.tpiba = this->tpiba;
+    signature.tpiba2 = this->tpiba2;
+    signature.nx = this->nx;
+    signature.ny = this->ny;
+    signature.nz = this->nz;
+    signature.fftnx = this->fftnx;
+    signature.fftny = this->fftny;
+    signature.fftnz = this->fftnz;
+    signature.npw = this->npw;
+    signature.G = this->G;
+    signature.GT = this->GT;
+    signature.GGT = this->GGT;
+    return signature;
+}
+
+bool PW_Basis::cache_signature_matches(const CacheSignature& signature) const
+{
+    return signature.lat0 == this->lat0
+           && signature.tpiba == this->tpiba
+           && signature.tpiba2 == this->tpiba2
+           && signature.nx == this->nx
+           && signature.ny == this->ny
+           && signature.nz == this->nz
+           && signature.fftnx == this->fftnx
+           && signature.fftny == this->fftny
+           && signature.fftnz == this->fftnz
+           && signature.npw == this->npw
+           && std::memcmp(&signature.G, &this->G, sizeof(ModuleBase::Matrix3)) == 0
+           && std::memcmp(&signature.GT, &this->GT, sizeof(ModuleBase::Matrix3)) == 0
+           && std::memcmp(&signature.GGT, &this->GGT, sizeof(ModuleBase::Matrix3)) == 0;
 }
 
 /// 
@@ -247,20 +278,12 @@ void PW_Basis::collect_local_pw()
         return;
     }
     ModuleBase::timer::start(this->classname, "collect_local_pw");
+    std::lock_guard<std::mutex> guard(this->cache_mutex);
     if (this->local_pw_cache_valid.load()
         && this->gg != nullptr
         && this->gdirect != nullptr
-        && this->gcar != nullptr)
-    {
-        this->local_pw_cache_hits.fetch_add(1);
-        ModuleBase::timer::end(this->classname, "collect_local_pw");
-        return;
-    }
-    std::lock_guard<cache_spinlock> guard(this->cache_lock);
-    if (this->local_pw_cache_valid.load()
-        && this->gg != nullptr
-        && this->gdirect != nullptr
-        && this->gcar != nullptr)
+        && this->gcar != nullptr
+        && this->cache_signature_matches(this->local_pw_cache_signature))
     {
         this->local_pw_cache_hits.fetch_add(1);
         ModuleBase::timer::end(this->classname, "collect_local_pw");
@@ -276,6 +299,11 @@ void PW_Basis::collect_local_pw()
     this->gcar = this->gcar_cache_storage.get();
     // Unique-G data depends on gg, so rebuilding local G data invalidates it.
     this->uniqgg_cache_valid.store(false);
+    this->ig2igg_cache_storage.reset();
+    this->gg_uniq_cache_storage.reset();
+    this->ig2igg = nullptr;
+    this->gg_uniq = nullptr;
+    this->ngg = 0;
 
     ModuleBase::Vector3<double> f;
     int gamma_num = 0;
@@ -317,6 +345,7 @@ void PW_Basis::collect_local_pw()
         }
     }
     this->local_pw_cache_valid.store(true);
+    this->local_pw_cache_signature = this->make_cache_signature();
     ModuleBase::timer::end(this->classname, "collect_local_pw");
     return;
 }
@@ -333,18 +362,11 @@ void PW_Basis::collect_uniqgg()
         return;
     }
     ModuleBase::timer::start(this->classname, "collect_uniqgg");
+    std::lock_guard<std::mutex> guard(this->cache_mutex);
     if (this->uniqgg_cache_valid.load()
         && this->ig2igg != nullptr
-        && this->gg_uniq != nullptr)
-    {
-        this->uniqgg_cache_hits.fetch_add(1);
-        ModuleBase::timer::end(this->classname, "collect_uniqgg");
-        return;
-    }
-    std::lock_guard<cache_spinlock> guard(this->cache_lock);
-    if (this->uniqgg_cache_valid.load()
-        && this->ig2igg != nullptr
-        && this->gg_uniq != nullptr)
+        && this->gg_uniq != nullptr
+        && this->cache_signature_matches(this->uniqgg_cache_signature))
     {
         this->uniqgg_cache_hits.fetch_add(1);
         ModuleBase::timer::end(this->classname, "collect_uniqgg");
@@ -359,7 +381,9 @@ void PW_Basis::collect_uniqgg()
     std::vector<double> tmpgg(this->npw);
     std::vector<double> tmpgg2(this->npw);
     // Reuse gg when collect_local_pw has already built the same G^2 values.
-    if (this->local_pw_cache_valid.load() && this->gg != nullptr)
+    if (this->local_pw_cache_valid.load()
+        && this->gg != nullptr
+        && this->cache_signature_matches(this->local_pw_cache_signature))
     {
         for(int ig = 0 ; ig < this-> npw ; ++ig)
         {
@@ -439,6 +463,7 @@ void PW_Basis::collect_uniqgg()
             gg_uniq[igg] = tmpgg2[igg];
     }
     this->uniqgg_cache_valid.store(true);
+    this->uniqgg_cache_signature = this->make_cache_signature();
     ModuleBase::timer::end(this->classname, "collect_uniqgg");
 }
 

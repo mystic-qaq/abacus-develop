@@ -94,22 +94,6 @@ class EnergyCutoffCriterion : public IPWCriterion
  * //then we can use pwtest.gg, pwtest.gdirect, pwtest.gcar, (unit in lat0^-1 or lat0^-2)
  *
  */
-/// Lightweight spinlock backed by std::atomic_flag. Satisfies BasicLockable so it
-/// works with std::lock_guard. Preferred over std::mutex for low-contention
-/// cache-initialisation paths where we want to avoid the kernel transition and do
-/// not need the mutex to be mutable (the owning methods are already non-const).
-struct cache_spinlock
-{
-    std::atomic_flag flag = ATOMIC_FLAG_INIT;
-    void lock()
-    {
-        while (flag.test_and_set(std::memory_order_acquire))
-        {
-        }
-    }
-    void unlock() { flag.clear(std::memory_order_release); }
-};
-
 class PW_Basis
 {
 
@@ -214,26 +198,16 @@ protected:
 
     virtual void invalidate_cache()
     {
-        // The public G-data pointers are non-owning views of the owned cache
-        // buffers below.  Invalidating must clear both flags and views so stale
-        // callers cannot observe old geometry through a still-nonnull pointer.
-        this->local_pw_cache_valid.store(false);
-        this->uniqgg_cache_valid.store(false);
-        this->gg = nullptr;
-        this->gdirect = nullptr;
-        this->gcar = nullptr;
-        this->ig2igg = nullptr;
-        this->gg_uniq = nullptr;
-        this->ig_gge0 = -1;
+        std::lock_guard<std::mutex> guard(this->cache_mutex);
+        this->invalidate_cache_unlocked();
     }
 
     void clear_owned_cache();
 
+    // Public gg/gcar/gdirect pointers are non-owning views of these cache buffers.
     std::atomic<bool> local_pw_cache_valid{false};
     std::atomic<bool> uniqgg_cache_valid{false};
-    cache_spinlock cache_lock;
-    // These buffers own gg/gdirect/gcar and ig2igg/gg_uniq after collection.
-    // The public raw pointers above are reset to their .get() values on rebuild.
+    mutable std::mutex cache_mutex;
     std::unique_ptr<double[]> gg_cache_storage;
     std::unique_ptr<ModuleBase::Vector3<double>[]> gdirect_cache_storage;
     std::unique_ptr<ModuleBase::Vector3<double>[]> gcar_cache_storage;
@@ -243,6 +217,46 @@ protected:
     std::atomic<std::uint64_t> local_pw_cache_misses{0};
     std::atomic<std::uint64_t> uniqgg_cache_hits{0};
     std::atomic<std::uint64_t> uniqgg_cache_misses{0};
+
+    struct CacheSignature
+    {
+        double lat0 = 0.0;
+        double tpiba = 0.0;
+        double tpiba2 = 0.0;
+        int nx = 0;
+        int ny = 0;
+        int nz = 0;
+        int fftnx = 0;
+        int fftny = 0;
+        int fftnz = 0;
+        int npw = 0;
+        ModuleBase::Matrix3 G;
+        ModuleBase::Matrix3 GT;
+        ModuleBase::Matrix3 GGT;
+    };
+    CacheSignature make_cache_signature() const;
+    bool cache_signature_matches(const CacheSignature& signature) const;
+    CacheSignature local_pw_cache_signature;
+    CacheSignature uniqgg_cache_signature;
+
+    virtual void invalidate_cache_unlocked()
+    {
+        this->local_pw_cache_valid.store(false);
+        this->uniqgg_cache_valid.store(false);
+        this->gg_cache_storage.reset();
+        this->gdirect_cache_storage.reset();
+        this->gcar_cache_storage.reset();
+        this->ig2igg_cache_storage.reset();
+        this->gg_uniq_cache_storage.reset();
+        this->gg = nullptr;
+        this->gdirect = nullptr;
+        this->gcar = nullptr;
+        this->ig2igg = nullptr;
+        this->gg_uniq = nullptr;
+        this->ngg = 0;
+        this->ig_gge0 = -1;
+    }
+    CacheStats get_cache_stats_unlocked() const;
 
     //distribute plane waves to different processors
     void distribute_g();

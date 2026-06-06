@@ -213,6 +213,8 @@ TEST_F(PWBasisKTEST, CollectLocalPW)
 	basis_k.initparameters(gamma_only_in, gk_ecut_in, nks_in, kvec_d_in, distribution_type_in, xprime_in);
 	EXPECT_EQ(basis_k.gcar, nullptr);
 	EXPECT_EQ(basis_k.gk2, nullptr);
+	EXPECT_EQ(basis_k.k_gcar_cache_storage, nullptr);
+	EXPECT_EQ(basis_k.k_gk2_cache_storage, nullptr);
 	EXPECT_EQ(basis_k.get_gcar_data<double>(), nullptr);
 	EXPECT_EQ(basis_k.get_gk2_data<double>(), nullptr);
 	EXPECT_EQ(basis_k.get_k_cache_stats().cache_bytes, 0);
@@ -256,6 +258,50 @@ TEST_F(PWBasisKTEST, CacheInvalidationByKParameters)
 	EXPECT_EQ(stats_after_erf_change.gk2_hits, 1);
 	EXPECT_EQ(stats_after_erf_change.gk2_misses, 3);
 	EXPECT_GT(stats_after_erf_change.cache_bytes, 0);
+}
+
+TEST_F(PWBasisKTEST, CacheSignatureRejectsChangedLattice)
+{
+	ModulePW::PW_Basis_K basis_k(device_flag, precision_double);
+	double lat0 = 1.8897261254578281;
+	ModuleBase::Matrix3 latvec(10.0,0.0,0.0,
+				0.0,10.0,0.0,
+				0.0,0.0,10.0);
+	basis_k.initgrids(lat0,latvec,10.0);
+	const ModuleBase::Vector3<double> kvec_d_in[2] = { {0.0, 0.0, 0.0}, {0.1, 0.2, 0.3} };
+	basis_k.initparameters(true, 11.0, 2, kvec_d_in, 1, true);
+	ASSERT_NO_THROW(basis_k.setuptransform());
+	basis_k.collect_local_pw();
+
+	const int ik = 1;
+	ASSERT_GT(basis_k.npwk[ik], 0);
+	int changed_igl = -1;
+	for (int igl = 0; igl < basis_k.npwk[ik]; ++igl)
+	{
+		if (std::abs(basis_k.getgcar(ik, igl).x) > 1e-12)
+		{
+			changed_igl = igl;
+			break;
+		}
+	}
+	ASSERT_GE(changed_igl, 0);
+	const double old_gcar_x = basis_k.getgcar(ik, changed_igl).x;
+	const double old_gk2 = basis_k.getgk2(ik, changed_igl);
+	basis_k.collect_local_pw();
+	EXPECT_EQ(basis_k.get_k_cache_stats().gcar_hits, 1);
+	EXPECT_EQ(basis_k.get_k_cache_stats().gcar_misses, 1);
+	EXPECT_EQ(basis_k.get_k_cache_stats().gk2_hits, 1);
+	EXPECT_EQ(basis_k.get_k_cache_stats().gk2_misses, 1);
+
+	basis_k.G.e11 *= 1.1;
+	basis_k.GGT = basis_k.G * basis_k.GT;
+	basis_k.collect_local_pw();
+	EXPECT_EQ(basis_k.get_k_cache_stats().gcar_hits, 1);
+	EXPECT_EQ(basis_k.get_k_cache_stats().gcar_misses, 2);
+	EXPECT_EQ(basis_k.get_k_cache_stats().gk2_hits, 1);
+	EXPECT_EQ(basis_k.get_k_cache_stats().gk2_misses, 2);
+	EXPECT_NE(basis_k.getgcar(ik, changed_igl).x, old_gcar_x);
+	EXPECT_NE(basis_k.getgk2(ik, changed_igl), old_gk2);
 }
 
 TEST_F(PWBasisKTEST, ComplexTransformRoundTrip)

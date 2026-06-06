@@ -49,21 +49,15 @@ PW_Basis_K::~PW_Basis_K()
 
 void PW_Basis_K::clear_k_cache_storage()
 {
-    this->invalidate_cache();
-    // These storage objects back the public host-side gcar/gk2 views.  Device
-    // double views alias host storage on CPU, so clear them with the host cache.
-    this->k_gcar_cache_storage.reset();
-    this->k_gk2_cache_storage.reset();
-    this->gcar = nullptr;
-    this->gk2 = nullptr;
-    this->d_gcar = nullptr;
-    this->d_gk2 = nullptr;
+    std::lock_guard<std::mutex> guard(this->cache_mutex);
+    this->invalidate_cache_unlocked();
 }
 
 PW_Basis_K::KCacheStats PW_Basis_K::get_k_cache_stats() const
 {
+    std::lock_guard<std::mutex> guard(this->cache_mutex);
     KCacheStats stats;
-    const auto base_stats = PW_Basis::get_cache_stats();
+    const auto base_stats = PW_Basis::get_cache_stats_unlocked();
     static_cast<PW_Basis::CacheStats&>(stats) = base_stats;
     stats.gcar_hits = this->gcar_cache_hits.load();
     stats.gcar_misses = this->gcar_cache_misses.load();
@@ -339,23 +333,13 @@ void PW_Basis_K::collect_local_pw(const double& erf_ecut_in, const double& erf_h
         ModuleBase::timer::end(this->classname, "collect_local_pw");
         return;
     }
-    const bool gcar_hit = this->gcar_cache_valid.load() && this->gcar != nullptr;
-    const bool gk2_hit = this->gk_cache_valid.load()
-                         && this->gk2 != nullptr
-                         && this->erf_ecut == erf_ecut_in
-                         && this->erf_height == erf_height_in
-                         && this->erf_sigma == erf_sigma_in;
-    if (gcar_hit && gk2_hit)
-    {
-        this->gcar_cache_hits.fetch_add(1);
-        this->gk2_cache_hits.fetch_add(1);
-        ModuleBase::timer::end(this->classname, "collect_local_pw");
-        return;
-    }
-    std::lock_guard<cache_spinlock> guard(this->cache_lock);
-    const bool locked_gcar_hit = this->gcar_cache_valid.load() && this->gcar != nullptr;
+    std::lock_guard<std::mutex> guard(this->cache_mutex);
+    const bool locked_gcar_hit = this->gcar_cache_valid.load()
+                                 && this->gcar != nullptr
+                                 && this->cache_signature_matches(this->k_gcar_cache_signature);
     const bool locked_gk2_hit = this->gk_cache_valid.load()
                                 && this->gk2 != nullptr
+                                && this->cache_signature_matches(this->k_gk2_cache_signature)
                                 && this->erf_ecut == erf_ecut_in
                                 && this->erf_height == erf_height_in
                                 && this->erf_sigma == erf_sigma_in;
@@ -444,11 +428,13 @@ void PW_Basis_K::collect_local_pw(const double& erf_ecut_in, const double& erf_h
     if (!locked_gcar_hit)
     {
         this->sync_gcar_device_cache();
+        this->k_gcar_cache_signature = this->make_cache_signature();
         this->gcar_cache_valid.store(true);
     }
     if (!locked_gk2_hit)
     {
         this->sync_gk2_device_cache();
+        this->k_gk2_cache_signature = this->make_cache_signature();
         this->gk_cache_valid.store(true);
     }
     ModuleBase::timer::end(this->classname, "collect_local_pw");
@@ -660,22 +646,26 @@ double* PW_Basis_K::get_kvec_c_data() const
 template <>
 float* PW_Basis_K::get_gcar_data() const
 {
+    std::lock_guard<std::mutex> guard(this->cache_mutex);
     return this->gcar_cache_valid.load() ? this->s_gcar : nullptr;
 }
 template <>
 double* PW_Basis_K::get_gcar_data() const
 {
+    std::lock_guard<std::mutex> guard(this->cache_mutex);
     return this->gcar_cache_valid.load() ? this->d_gcar : nullptr;
 }
 
 template <>
 float* PW_Basis_K::get_gk2_data() const
 {
+    std::lock_guard<std::mutex> guard(this->cache_mutex);
     return this->gk_cache_valid.load() ? this->s_gk2 : nullptr;
 }
 template <>
 double* PW_Basis_K::get_gk2_data() const
 {
+    std::lock_guard<std::mutex> guard(this->cache_mutex);
     return this->gk_cache_valid.load() ? this->d_gk2 : nullptr;
 }
 

@@ -111,20 +111,26 @@ public:
     void reset_k_cache_stats();
 
   private:
-    void invalidate_cache() override
-    {
-      PW_Basis::invalidate_cache();
-      this->gcar_cache_valid.store(false);
-      this->gk_cache_valid.store(false);
-      this->gk2 = nullptr;
-    }
-
     void clear_k_cache_storage();
+    void invalidate_cache_unlocked() override
+    {
+        PW_Basis::invalidate_cache_unlocked();
+        this->gcar_cache_valid.store(false);
+        this->gk_cache_valid.store(false);
+        this->k_gcar_cache_storage.reset();
+        this->k_gk2_cache_storage.reset();
+        this->gcar = nullptr;
+        this->gk2 = nullptr;
+        this->d_gcar = nullptr;
+        this->d_gk2 = nullptr;
+    }
     void sync_gcar_device_cache();
     void sync_gk2_device_cache();
 
     std::atomic<bool> gcar_cache_valid{false};
     std::atomic<bool> gk_cache_valid{false};
+    CacheSignature k_gcar_cache_signature;
+    CacheSignature k_gk2_cache_signature;
     std::unique_ptr<ModuleBase::Vector3<double>[]> k_gcar_cache_storage;
     std::unique_ptr<double[]> k_gk2_cache_storage;
     std::atomic<std::uint64_t> gcar_cache_hits{0};
@@ -137,6 +143,8 @@ public:
     void setupIndGk();
     // get ig2ixyz_k
     void get_ig2ixyz_k();
+    //calculate G+K in cartesian coordinates
+    ModuleBase::Vector3<double> cal_GplusK_cartesian(const int ik, const int ig) const;
   public:
     template <typename FPTYPE>
     void real2recip(const FPTYPE* in,
