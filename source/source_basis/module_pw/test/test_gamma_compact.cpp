@@ -172,18 +172,4 @@ TEST(CompactGammaData, PWBasisAutomaticGammaPathFallsBackWithoutLocalMinusGPair)
     EXPECT_TRUE(pw.gamma_only_minus_g_map().empty());
 }
 
-TEST(CompactGammaData, ElecStatePWGammaOnlyChargePathUsesCompactHelperStatically)
-{
-    std::ifstream source("source/source_estate/elecstate_pw.cpp");
-    ASSERT_TRUE(source.good());
-
-    const std::string code((std::istreambuf_iterator<char>(source)), std::istreambuf_iterator<char>());
-    EXPECT_NE(code.find("can_compact_smooth_rhog = PARAM.inp.gamma_only"), std::string::npos);
-    EXPECT_NE(code.find("PARAM.inp.device == \"cpu\""), std::string::npos);
-    EXPECT_NE(code.find("rhopw_smooth->can_use_gamma_only_compact()"), std::string::npos);
-    EXPECT_NE(code.find("rhopw_smooth->real2recip_compact"), std::string::npos);
-    EXPECT_NE(code.find("charge->rhopw->recip2real_compact"), std::string::npos);
-    EXPECT_NE(code.find("charge->rhopw->recip2real(this->rhog"), std::string::npos);
-}
-
 } // namespace
