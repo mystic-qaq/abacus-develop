@@ -112,9 +112,9 @@ public:
 
   private:
     void clear_k_cache_storage();
-    void invalidate_cache_unlocked() override
+    void invalidate_cache() override
     {
-        PW_Basis::invalidate_cache_unlocked();
+        PW_Basis::invalidate_cache();
         this->gcar_cache_valid.store(false);
         this->gk_cache_valid.store(false);
         this->k_gcar_cache_storage.reset();

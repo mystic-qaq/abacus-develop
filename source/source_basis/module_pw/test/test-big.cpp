@@ -53,7 +53,7 @@ TEST_F(PWTEST,test_big)
     pwktest.initgrids(lat0,latvec, pwtest.nx, pwtest.ny, pwtest.nz);
     pwtest.initparameters(gamma_only,wfcecut,distribution_type,xprime);
     pwktest.initparameters(gamma_only,wfcecut,nks,kvec_d,distribution_type, xprime);
-    pwtest.ModulePW::PW_Basis::setuptransform();
+    static_cast<ModulePW::PW_Basis>(pwtest).setuptransform();
     pwktest.setuptransform();
     EXPECT_EQ(pwtest.nx%2, 0);
     EXPECT_EQ(pwtest.ny%2, 0);
@@ -85,7 +85,7 @@ TEST_F(PWTEST,test_big)
 class TestPW_Basis_Big : public ::testing::Test
 {
     public:
-    ModulePW::PW_Basis_Big pwtest;
+    ModulePW::PW_Basis_Big pwtest = ModulePW::PW_Basis_Big();
 };
 
 // Test the function with nproc = 0 (bx and by)
