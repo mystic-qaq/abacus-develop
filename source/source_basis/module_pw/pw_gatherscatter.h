@@ -54,8 +54,8 @@ inline void copy_complex_buffer_parallel(const std::complex<T>* in, std::complex
 template <typename T>
 void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
 {
-    
-    if(this->poolnproc == 1) //In this case nst=nstot, nz = nplane, 
+
+    if(this->poolnproc == 1) //In this case nst=nstot, nz = nplane,
     {
         const int nst_ = this->nst;
         const int nz_ = this->nz;
@@ -148,7 +148,10 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
 template <typename T>
 void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
 {
-    if(this->poolnproc == 1) //In this case nrxx=fftnx*fftny*nz, nst = nstot, 
+
+
+
+    if(this->poolnproc == 1) //In this case nrxx=fftnx*fftny*nz, nst = nstot,
     {
         const int nrxx_ = this->nrxx;
         const int nst_ = this->nst;

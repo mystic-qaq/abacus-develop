@@ -56,6 +56,14 @@ class PW_Basis_K : public PW_Basis
 {
 
 public:
+    struct KCacheStats : public PW_Basis::CacheStats
+    {
+        std::uint64_t gcar_hits = 0;
+        std::uint64_t gcar_misses = 0;
+        std::uint64_t gk2_hits = 0;
+        std::uint64_t gk2_misses = 0;
+    };
+
     PW_Basis_K();
     PW_Basis_K(std::string device_, std::string precision_) : PW_Basis(device_, precision_) {classname="PW_Basis_K";}
     ~PW_Basis_K();
@@ -99,16 +107,42 @@ public:
                           const double& erf_height_in = 0.0,
                           const double& erf_sigma_in = 0.1);
 
+    KCacheStats get_k_cache_stats() const;
+    void reset_k_cache_stats();
+
   private:
+    void clear_k_cache_storage();
+    void invalidate_cache_unlocked() override
+    {
+        PW_Basis::invalidate_cache_unlocked();
+        this->gcar_cache_valid.store(false);
+        this->gk_cache_valid.store(false);
+        this->k_gcar_cache_storage.reset();
+        this->k_gk2_cache_storage.reset();
+        this->gcar = nullptr;
+        this->gk2 = nullptr;
+        this->d_gcar = nullptr;
+        this->d_gk2 = nullptr;
+    }
+    void sync_gcar_device_cache();
+    void sync_gk2_device_cache();
+
+    std::atomic<bool> gcar_cache_valid{false};
+    std::atomic<bool> gk_cache_valid{false};
+    std::unique_ptr<ModuleBase::Vector3<double>[]> k_gcar_cache_storage;
+    std::unique_ptr<double[]> k_gk2_cache_storage;
+    std::atomic<std::uint64_t> gcar_cache_hits{0};
+    std::atomic<std::uint64_t> gcar_cache_misses{0};
+    std::atomic<std::uint64_t> gk2_cache_hits{0};
+    std::atomic<std::uint64_t> gk2_cache_misses{0};
     float  * s_gk2 = nullptr;
     double * d_gk2 = nullptr; // modulus (G+K)^2 of G vectors [npwk_max*nks]
     //create igl2isz_k map array for fft
     void setupIndGk();
     // get ig2ixyz_k
     void get_ig2ixyz_k();
-    //calculate G+K, it is a private function
+    //calculate G+K in cartesian coordinates
     ModuleBase::Vector3<double> cal_GplusK_cartesian(const int ik, const int ig) const;
-
   public:
     template <typename FPTYPE>
     void real2recip(const FPTYPE* in,
@@ -322,4 +356,3 @@ private:
 #endif //PlaneWave_K class
 
 #include "./pw_basis_k_big.h" //temporary it will be removed
-
