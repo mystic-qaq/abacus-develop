@@ -2,19 +2,52 @@
 #include "pw_simd_copy.h"
 #include "source_base/global_function.h"
 #include "source_base/timer.h"
+#include <algorithm>
 #include <type_traits>
 #include <vector>
 
 namespace ModulePW
 {
+namespace detail
+{
+template <typename T>
+inline void copy_complex_buffer(const std::complex<T>* in, std::complex<T>* out, const int count)
+{
+    if (count <= 0)
+    {
+        return;
+    }
+
+    std::copy_n(in, count, out);
+}
+
+template <typename T>
+inline void copy_complex_buffer_parallel(const std::complex<T>* in, std::complex<T>* out, const int count)
+{
+    constexpr int chunk_size = 1024;
+    if (count <= chunk_size)
+    {
+        copy_complex_buffer(in, out, count);
+        return;
+    }
+
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+    for (int offset = 0; offset < count; offset += chunk_size)
+    {
+        const int chunk_count = std::min(chunk_size, count - offset);
+        std::copy_n(in + offset, chunk_count, out + offset);
+    }
+#else
+    copy_complex_buffer(in, out, count);
+#endif
+}
 
 // ---------------------------------------------------------------------------
 // Compile-time MPI complex type dispatch — avoids typeid() runtime overhead.
 // Only available under __MPI; call-sites are already guarded by #ifdef __MPI.
 // ---------------------------------------------------------------------------
 #ifdef __MPI
-namespace detail
-{
 template <typename T>
 inline MPI_Datatype mpi_complex_dtype()
 {
@@ -32,8 +65,8 @@ inline MPI_Datatype mpi_complex_dtype<float>()
 {
     return MPI_COMPLEX;
 }
-} // namespace detail
 #endif // __MPI
+} // namespace detail
 
 /**
  * @brief gather planes and scatter sticks
@@ -52,6 +85,7 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
         const int nst_ = this->nst;
         const int nz_ = this->nz;
         const int* istot2ixy_ = this->istot2ixy;
+        ModuleBase::timer::start(this->classname, "gatherp_copy_serial");
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
 #endif
@@ -64,6 +98,7 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
                                   reinterpret_cast<const T*>(inp),
                                   2 * nz_);
         }
+        ModuleBase::timer::end(this->classname, "gatherp_copy_serial");
         ModuleBase::timer::end(this->classname, "gatherp_scatters");
         return;
     }
@@ -258,6 +293,7 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
         const int nst_ = this->nst;
         const int nz_ = this->nz;
         const int* istot2ixy_ = this->istot2ixy;
+        ModuleBase::timer::start(this->classname, "gathers_zero_serial");
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
 #endif
@@ -265,7 +301,9 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
         {
             out[i] = std::complex<T>(0, 0);
         }
+        ModuleBase::timer::end(this->classname, "gathers_zero_serial");
 
+        ModuleBase::timer::start(this->classname, "gathers_copy_serial");
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
 #endif
@@ -278,6 +316,7 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
                                   reinterpret_cast<const T*>(inp),
                                   2 * nz_);
         }
+        ModuleBase::timer::end(this->classname, "gathers_copy_serial");
         ModuleBase::timer::end(this->classname, "gathers_scatterp");
         return;
     }
