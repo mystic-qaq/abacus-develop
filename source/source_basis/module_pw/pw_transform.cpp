@@ -634,7 +634,8 @@ void PW_Basis::real2recip_compact(const FPTYPE* in,
         out.decompress_to(dense.data());
     }
     out.reset(this->npw);
-    if (const std::vector<int> minus_g = this->gamma_only_minus_g_map(); !minus_g.empty())
+    const std::vector<int> minus_g = this->gamma_only_minus_g_map();
+    if (!minus_g.empty())
     {
         out.reset(this->npw, minus_g.data());
     }
