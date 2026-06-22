@@ -1,6 +1,7 @@
 #include "source_pw/module_pwdft/setup_pwrho.h"
 #include "source_io/module_output/print_info.h" // use print_rhofft
 #include "source_base/parallel_comm.h" // use POOL_WORLD
+#include "source_io/module_parameter/parameter.h"
 
 void pw::setup_pwrho(
 		UnitCell& ucell, // unitcell 
@@ -80,7 +81,7 @@ void pw::setup_pwrho(
         pw_rho->initgrids(inp.ref_cell_factor * ucell.lat0, ucell.latvec, inp.nx, inp.ny, inp.nz);
     }
 
-    pw_rho->initparameters(false, 4.0 * inp.ecutwfc);
+    pw_rho->initparameters(PARAM.globalv.gamma_only_pw, 4.0 * inp.ecutwfc);
     pw_rho->fft_bundle.initfftmode(inp.fft_mode);
     pw_rho->setuptransform();
     pw_rho->collect_local_pw();
@@ -105,7 +106,7 @@ void pw::setup_pwrho(
         {
             pw_rhod->initgrids(inp.ref_cell_factor * ucell.lat0, ucell.latvec, inp.ndx, inp.ndy, inp.ndz);
         }
-        pw_rhod->initparameters(false, inp.ecutrho);
+        pw_rhod->initparameters(PARAM.globalv.gamma_only_pw, inp.ecutrho);
         pw_rhod->fft_bundle.initfftmode(inp.fft_mode);
         pw_rhod_sup->setuptransform(pw_rho);
         pw_rhod->collect_local_pw();

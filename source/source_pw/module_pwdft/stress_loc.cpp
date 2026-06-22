@@ -25,8 +25,8 @@ void Stress_Func<FPTYPE, Device>::stress_loc(const UnitCell& ucell,
 
 	const int nspin_rho = (PARAM.inp.nspin == 2) ? 2 : 1;
 
-	if (PARAM.inp.gamma_only && is_pw) 
-	{ 
+	if (PARAM.globalv.gamma_only_pw && is_pw)
+	{
 		fact=2.0;
 	}
 

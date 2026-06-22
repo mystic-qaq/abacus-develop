@@ -53,7 +53,7 @@ void pw::setup_pwwfc(const Input_para& inp,
 			pw_rho.ny,
 			pw_rho.nz);
 
-    pw_wfc->initparameters(false, inp.ecutwfc, kv.get_nks(), kv.kvec_d.data());
+    pw_wfc->initparameters(PARAM.globalv.gamma_only_pw, inp.ecutwfc, kv.get_nks(), kv.kvec_d.data());
 #ifdef __MPI
     if (inp.pw_seed > 0)
     {
@@ -64,6 +64,28 @@ void pw::setup_pwwfc(const Input_para& inp,
 
     pw_wfc->fft_bundle.initfftmode(inp.fft_mode);
     pw_wfc->setuptransform();
+
+    // GammaOnly diagnostic: log how many k-points are Gamma points
+    if (PARAM.globalv.gamma_only_pw && pw_wfc->is_gamma_k != nullptr)
+    {
+        int num_gamma_k = 0;
+        for (int ik = 0; ik < kv.get_nks(); ++ik)
+        {
+            if (pw_wfc->is_gamma_k[ik]) { ++num_gamma_k; }
+        }
+        GlobalV::ofs_running << " GammaOnly PW: " << num_gamma_k << " of "
+                             << kv.get_nks() << " k-points are Gamma points.";
+        if (num_gamma_k == kv.get_nks())
+        {
+            GlobalV::ofs_running << " Full GammaOnly mode active (half-spectrum FFT for all k-points).";
+        }
+        else if (num_gamma_k > 0)
+        {
+            GlobalV::ofs_running << " Mixed k-points detected; wavefunctions use full-complex FFT."
+                                 << " Charge density still uses half-spectrum FFT.";
+        }
+        GlobalV::ofs_running << std::endl;
+    }
 
     //! initialize the number of plane waves for each k point
     for (int ik = 0; ik < kv.get_nks(); ++ik)

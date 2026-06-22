@@ -82,6 +82,7 @@ public:
     int nks=0;//number of k points in this pool
     ModuleBase::Vector3<double> *kvec_d=nullptr; // Direct coordinates of k points
     ModuleBase::Vector3<double> *kvec_c=nullptr; // Cartesian coordinates of k points
+    bool *is_gamma_k=nullptr; //[nks] whether each k-point is a Gamma point (|k| < 1e-12)
     int *npwk=nullptr; //[nks] number of plane waves of different k-points
     int npwk_max=0; //max npwk among all nks k-points, it may be smaller than npw
                   //npw cutoff: (|g|+|k|)^2, npwk in the the npw ball, thus is smaller

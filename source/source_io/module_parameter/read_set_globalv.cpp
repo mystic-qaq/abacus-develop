@@ -12,7 +12,14 @@ void ReadInput::set_globalv(const Input_para& inp, System_para& sys)
     /// caculate the gamma_only_pw and gamma_only_local
     if (inp.gamma_only)
     {
-        sys.gamma_only_local = true;
+        if (inp.basis_type == "lcao")
+        {
+            sys.gamma_only_local = true;
+        }
+        else if (inp.basis_type == "pw")
+        {
+            sys.gamma_only_pw = true;
+        }
     }
     if (sys.gamma_only_local)
     {
@@ -20,6 +27,14 @@ void ReadInput::set_globalv(const Input_para& inp, System_para& sys)
         {
             GlobalV::ofs_running << " WARNING : gamma_only is not applicable for tddft" << std::endl;
             sys.gamma_only_local = false;
+        }
+    }
+    if (sys.gamma_only_pw)
+    {
+        if (inp.esolver_type == "tddft")
+        {
+            GlobalV::ofs_running << " WARNING : gamma_only is not applicable for tddft" << std::endl;
+            sys.gamma_only_pw = false;
         }
     }
     /// set deepks_setorb

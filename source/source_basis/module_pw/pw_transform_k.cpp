@@ -32,12 +32,31 @@ void PW_Basis_K::real2recip(const std::complex<FPTYPE>* in,
 {
     ModuleBase::timer::start(this->classname, "real2recip");
 
-    assert(this->gamma_only == false);
     auto* auxr = this->fft_bundle.get_auxr_data<FPTYPE>();
-    detail::copy_complex_buffer_parallel(in, auxr, this->nrxx);
-    this->fft_bundle.fftxyfor(fft_bundle.get_auxr_data<FPTYPE>(), fft_bundle.get_auxr_data<FPTYPE>());
+    if (this->gamma_only)
+    {
+        // gamma_only: extract real parts from complex input, use r2c FFT path
+        const int npy = this->ny * this->nplane;
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) schedule(static)
+#endif
+        for (int ix = 0; ix < this->nx; ++ix)
+        {
+            for (int ipy = 0; ipy < npy; ++ipy)
+            {
+                this->fft_bundle.get_rspace_data<FPTYPE>()[ix * npy + ipy]
+                    = in[ix * npy + ipy].real();
+            }
+        }
+        this->fft_bundle.fftxyr2c(fft_bundle.get_rspace_data<FPTYPE>(), auxr);
+    }
+    else
+    {
+        detail::copy_complex_buffer_parallel(in, auxr, this->nrxx);
+        this->fft_bundle.fftxyfor(auxr, auxr);
+    }
 
-    this->gatherp_scatters(this->fft_bundle.get_auxr_data<FPTYPE>(), this->fft_bundle.get_auxg_data<FPTYPE>());
+    this->gatherp_scatters(auxr, this->fft_bundle.get_auxg_data<FPTYPE>());
 
     this->fft_bundle.fftzfor(fft_bundle.get_auxg_data<FPTYPE>(), fft_bundle.get_auxg_data<FPTYPE>());
 
@@ -164,7 +183,6 @@ void PW_Basis_K::recip2real(const std::complex<FPTYPE>* in,
                             const FPTYPE factor) const
 {
     ModuleBase::timer::start(this->classname, "recip2real");
-    assert(this->gamma_only == false);
     ModuleBase::GlobalFunc::ZEROS(fft_bundle.get_auxg_data<FPTYPE>(), this->nst * this->nz);
 
     const int startig = ik * this->npwk_max;
@@ -181,21 +199,65 @@ void PW_Basis_K::recip2real(const std::complex<FPTYPE>* in,
 
     this->gathers_scatterp(this->fft_bundle.get_auxg_data<FPTYPE>(), this->fft_bundle.get_auxr_data<FPTYPE>());
 
-    this->fft_bundle.fftxybac(fft_bundle.get_auxr_data<FPTYPE>(), fft_bundle.get_auxr_data<FPTYPE>());
     auto* auxr = this->fft_bundle.get_auxr_data<FPTYPE>();
-    if (add)
+    if (this->gamma_only)
     {
-#ifdef _OPENMP
-#pragma omp parallel for schedule(static)
-#endif
-        for (int ir = 0; ir < this->nrxx; ++ir)
+        // gamma_only: use c2r FFT, then expand real output to complex with imag=0
+        this->fft_bundle.fftxyc2r(auxr, fft_bundle.get_rspace_data<FPTYPE>());
+
+        const int npy = this->ny * this->nplane;
+        if (add)
         {
-            out[ir] += factor * auxr[ir];
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) schedule(static)
+#endif
+            for (int ix = 0; ix < this->nx; ++ix)
+            {
+                for (int ipy = 0; ipy < npy; ++ipy)
+                {
+                    out[ix * npy + ipy] += factor
+                        * std::complex<FPTYPE>(this->fft_bundle.get_rspace_data<FPTYPE>()[ix * npy + ipy], 0.0);
+                }
+            }
+        }
+        else
+        {
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) schedule(static)
+#endif
+            for (int ix = 0; ix < this->nx; ++ix)
+            {
+                for (int ipy = 0; ipy < npy; ++ipy)
+                {
+                    out[ix * npy + ipy]
+                        = std::complex<FPTYPE>(this->fft_bundle.get_rspace_data<FPTYPE>()[ix * npy + ipy], 0.0);
+                }
+            }
         }
     }
     else
     {
-        detail::copy_complex_buffer_parallel(auxr, out, this->nrxx);
+        this->fft_bundle.fftxybac(auxr, auxr);
+        if (add)
+        {
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+            for (int ir = 0; ir < this->nrxx; ++ir)
+            {
+                out[ir] += factor * auxr[ir];
+            }
+        }
+        else
+        {
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+            for (int ir = 0; ir < this->nrxx; ++ir)
+            {
+                out[ir] = auxr[ir];
+            }
+        }
     }
     ModuleBase::timer::end(this->classname, "recip2real");
 }

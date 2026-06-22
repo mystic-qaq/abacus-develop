@@ -60,31 +60,59 @@ void PW_Basis::real2recip(const std::complex<FPTYPE>* in,
 {
     ModuleBase::timer::start(this->classname, "real2recip");
 
-    assert(this->gamma_only == false);
     const int nrxx_ = this->nrxx;
     const int npw_ = this->npw;
     const int nxyz_ = this->nxyz;
     const int* ig2isz_ = this->ig2isz;
+    const int nx_ = this->nx;
+    const int ny_ = this->ny;
+    const int nplane_ = this->nplane;
     const std::complex<FPTYPE>* in_ = in;
     std::complex<FPTYPE>* auxr = this->fft_bundle.get_auxr_data<FPTYPE>();
     std::complex<FPTYPE>* auxg = this->fft_bundle.get_auxg_data<FPTYPE>();
+    FPTYPE* rspace = this->fft_bundle.get_rspace_data<FPTYPE>();
     ModuleBase::timer::start(this->classname, "real2recip_copy_r");
+    if (this->gamma_only)
+    {
+        // gamma_only: extract real parts from complex input, use r2c FFT path
+        const int npy = ny_ * nplane_;
+        const int nreal = nx_ * npy;
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
 #endif
-    for (int ib = 0; ib < nrxx_; ib += pw_transform_cache_block)
-    {
-        const int iend = block_end(ib, nrxx_);
+        for (int ib = 0; ib < nreal; ib += pw_transform_cache_block)
+        {
+            const int iend = block_end(ib, nreal);
 #ifdef _OPENMP
 #pragma omp simd
 #endif
-        for (int ir = ib; ir < iend; ++ir)
-        {
-            auxr[ir] = in_[ir];
+            for (int ir = ib; ir < iend; ++ir)
+            {
+                rspace[ir] = in_[ir].real();
+            }
         }
+        ModuleBase::timer::end(this->classname, "real2recip_copy_r");
+        this->fft_bundle.fftxyr2c(rspace, auxr);
     }
-    ModuleBase::timer::end(this->classname, "real2recip_copy_r");
-    this->fft_bundle.fftxyfor(auxr, auxr);
+    else
+    {
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+        for (int ib = 0; ib < nrxx_; ib += pw_transform_cache_block)
+        {
+            const int iend = block_end(ib, nrxx_);
+#ifdef _OPENMP
+#pragma omp simd
+#endif
+            for (int ir = ib; ir < iend; ++ir)
+            {
+                auxr[ir] = in_[ir];
+            }
+        }
+        ModuleBase::timer::end(this->classname, "real2recip_copy_r");
+        this->fft_bundle.fftxyfor(auxr, auxr);
+    }
 
     this->gatherp_scatters(auxr, auxg);
 
@@ -277,11 +305,13 @@ void PW_Basis::recip2real(const std::complex<FPTYPE>* in,
                           const FPTYPE factor) const
 {
     ModuleBase::timer::start(this->classname, "recip2real");
-    assert(this->gamma_only == false);
     const int nst_ = this->nst;
     const int nz_ = this->nz;
     const int npw_ = this->npw;
     const int nrxx_ = this->nrxx;
+    const int nx_ = this->nx;
+    const int ny_ = this->ny;
+    const int nplane_ = this->nplane;
     const int* ig2isz_ = this->ig2isz;
     const int nstnz_ = nst_ * nz_;
     std::complex<FPTYPE>* auxg = this->fft_bundle.get_auxg_data<FPTYPE>();
@@ -321,44 +351,91 @@ void PW_Basis::recip2real(const std::complex<FPTYPE>* in,
 
     this->gathers_scatterp(auxg, auxr);
 
-    this->fft_bundle.fftxybac(auxr, auxr);
-
-    ModuleBase::timer::start(this->classname, "recip2real_copy_r");
-    if (add)
+    if (this->gamma_only)
     {
+        // gamma_only: use c2r FFT, then expand real output to complex with imag=0
+        this->fft_bundle.fftxyc2r(auxr, fft_bundle.get_rspace_data<FPTYPE>());
+
+        const int npy = ny_ * nplane_;
+        const int nreal = nx_ * npy;
+        auto* rspace = this->fft_bundle.get_rspace_data<FPTYPE>();
+        ModuleBase::timer::start(this->classname, "recip2real_copy_r");
+        if (add)
+        {
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
 #endif
-        for (int ib = 0; ib < nrxx_; ib += pw_transform_cache_block)
-        {
-            const int iend = block_end(ib, nrxx_);
+            for (int ib = 0; ib < nreal; ib += pw_transform_cache_block)
+            {
+                const int iend = block_end(ib, nreal);
 #ifdef _OPENMP
 #pragma omp simd
 #endif
-            for (int ir = ib; ir < iend; ++ir)
-            {
-                out[ir] += factor * auxr[ir];
+                for (int ir = ib; ir < iend; ++ir)
+                {
+                    out[ir] += factor * std::complex<FPTYPE>(rspace[ir], 0.0);
+                }
             }
         }
+        else
+        {
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+            for (int ib = 0; ib < nreal; ib += pw_transform_cache_block)
+            {
+                const int iend = block_end(ib, nreal);
+#ifdef _OPENMP
+#pragma omp simd
+#endif
+                for (int ir = ib; ir < iend; ++ir)
+                {
+                    out[ir] = std::complex<FPTYPE>(rspace[ir], 0.0);
+                }
+            }
+        }
+        ModuleBase::timer::end(this->classname, "recip2real_copy_r");
     }
     else
     {
+        this->fft_bundle.fftxybac(auxr, auxr);
+        ModuleBase::timer::start(this->classname, "recip2real_copy_r");
+        if (add)
+        {
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
 #endif
-        for (int ib = 0; ib < nrxx_; ib += pw_transform_cache_block)
-        {
-            const int iend = block_end(ib, nrxx_);
+            for (int ib = 0; ib < nrxx_; ib += pw_transform_cache_block)
+            {
+                const int iend = block_end(ib, nrxx_);
 #ifdef _OPENMP
 #pragma omp simd
 #endif
-            for (int ir = ib; ir < iend; ++ir)
-            {
-                out[ir] = auxr[ir];
+                for (int ir = ib; ir < iend; ++ir)
+                {
+                    out[ir] += factor * auxr[ir];
+                }
             }
         }
+        else
+        {
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+            for (int ib = 0; ib < nrxx_; ib += pw_transform_cache_block)
+            {
+                const int iend = block_end(ib, nrxx_);
+#ifdef _OPENMP
+#pragma omp simd
+#endif
+                for (int ir = ib; ir < iend; ++ir)
+                {
+                    out[ir] = auxr[ir];
+                }
+            }
+        }
+        ModuleBase::timer::end(this->classname, "recip2real_copy_r");
     }
-    ModuleBase::timer::end(this->classname, "recip2real_copy_r");
     ModuleBase::timer::end(this->classname, "recip2real");
 }
 

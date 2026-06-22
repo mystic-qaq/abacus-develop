@@ -101,10 +101,6 @@ void PW_Basis::count_pw_st(
         for (int iy = iy_start; iy <= iy_end; ++iy)
         {
             // we shift all sticks to the first quadrant in x-y plane here.
-            // (ix, iy, iz) is the direct coordinates of planewaves.
-            // x and y is the coordinates of shifted sticks in x-y plane.
-            // for example, if fftny = fftnx = 10, we will shift the stick on (-1, 2) to (9, 2),
-            // so that its index in st_length and st_bottom is 9 * 10 + 2 = 92.
             int x = ix;
             int y = iy;
             if (x < 0) { x += this->nx; }
@@ -120,7 +116,7 @@ void PW_Basis::count_pw_st(
             for (int iz = iz_start; iz <= iz_end; ++iz)
             {
                 f.z = iz;
-                double modulus = f * (this->GGT * f);
+                double modulus = f * (GGT * f);
                 if (modulus <= this->ggecut || this->full_pw)
                 {
                     if (length == 0)

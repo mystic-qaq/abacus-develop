@@ -783,26 +783,28 @@ Note: If gamma_only is set to 1, the KPT file will be overwritten. So make sure 
         item.availability = "Only used in localized orbitals set";
         read_sync_bool(input.gamma_only);
         item.reset_value = [](const Input_Item& item, Parameter& para) {
-            if (para.input.basis_type == "pw" && para.input.gamma_only)
+            if (para.input.gamma_only)
             {
-                para.input.gamma_only = false;
-                GlobalV::ofs_warning << " WARNING : gamma_only has not been implemented for pw yet" << std::endl;
-                GlobalV::ofs_warning << "gamma_only is not supported in the pw model" << std::endl;
-                GlobalV::ofs_warning << " the INPUT parameter gamma_only has been reset to 0" << std::endl;
-                GlobalV::ofs_warning << " and a new KPT is generated with gamma point as the only k point"<< std::endl;
-                GlobalV::ofs_warning << " Auto generating k-points file: " << para.input.kpoint_file << std::endl;
-                std::ofstream ofs(para.input.kpoint_file.c_str());
-                ofs << "K_POINTS" << std::endl;
-                ofs << "0" << std::endl;
-                ofs << "Gamma" << std::endl;
-                ofs << "1 1 1 0 0 0" << std::endl;
-                ofs.close();
-            }
-            if (para.input.basis_type == "lcao" && para.input.gamma_only)
-            {
-                if (para.input.nspin == 4)
+                // PW: gamma_only enabled when conditions are safe
+                if (para.input.basis_type == "pw")
                 {
-                    ModuleBase::WARNING_QUIT("NOTICE", "nspin=4 (soc or noncollinear-spin) does not support gamma\n only calculation");
+                    if (para.input.nspin == 4)
+                    {
+                        para.input.gamma_only = false;
+                        GlobalV::ofs_warning << " WARNING : gamma_only does not support nspin=4 (SOC/noncollinear)" << std::endl;
+                        GlobalV::ofs_warning << " the INPUT parameter gamma_only has been reset to 0" << std::endl;
+                    }
+                    // else: keep gamma_only = true, respect the user's KPT file.
+                    // PW_Basis_K will auto-detect non-Gamma k-points and fall back
+                    // to full-complex per-k when necessary.
+                }
+                // LCAO: existing gamma_only logic
+                if (para.input.basis_type == "lcao")
+                {
+                    if (para.input.nspin == 4)
+                    {
+                        ModuleBase::WARNING_QUIT("NOTICE", "nspin=4 (soc or noncollinear-spin) does not support gamma\n only calculation");
+                    }
                 }
             }
         };
