@@ -1,87 +1,59 @@
-# Final integration validation report
+# Final Integration Validation Report
 
 Date: 2026-06-22
 
 Branch: `final`
 
-Integrated local merge commits:
-
-- `e7fcf4cff` merge `GammaOnly`
-- `98d75153c` merge `pr/nonblocking-mpi`
-- `6c4587ea8` merge `pr/fft-transform-overlap`
-
 ## Scope
 
-This report validates the merged `final` branch itself, not just the three feature branches in isolation.
+This report validates the current integrated `final` branch after manually folding in
+the latest audited task-2 / task-4 / task-7 work:
 
-The integrated content covered here is:
+- task 2: nonblocking point-to-point gather/scatter path
+- task 4: multi-k all-Gamma `GammaOnly` path
+- task 7: double-buffer overlap pipeline
 
-- task 7: `GammaOnly`
-- task 2: `pr/nonblocking-mpi`
-- task 4: `pr/fft-transform-overlap`
+The focus here is the merged branch itself, not the feature branches in isolation.
 
-## Build
+## Build note
 
-Validated configuration:
+Validated executable:
+
+- `build-rel/abacus_pw_para`
+
+Build command:
 
 ```bash
-cmake -S . -B build-rel -G Ninja \
-  -DCMAKE_CXX_COMPILER=/usr/bin/mpicxx \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DBUILD_TESTING=ON -DENABLE_MPI=ON -DUSE_OPENMP=ON \
-  -DENABLE_LCAO=OFF -DENABLE_LIBXC=OFF -DUSE_ELPA=OFF \
-  -DUSE_CUDA=OFF -DUSE_ROCM=OFF
+cmake --build build-rel --target abacus_pw_para -j 8
 ```
 
-Validated build targets:
+As in earlier audits, full `cmake --build build-rel` is still blocked by the unrelated
+upstream unit-test compile error in
+`source/source_cell/test/read_atoms_helper_test.cpp`.
 
-- `abacus_pw_para`
-- `source/source_basis/module_pw/test/MODULE_PW_pw_test`
+## Correctness validation
 
-## Final-branch correctness evidence
+All audited runs used `OMP_NUM_THREADS=1`.
 
-All MPI end-to-end runs below used:
+### 1. `007_PW_UPF201_USPP_Fe` (`np=6`)
 
-- the merged `final` executable `build-rel/abacus_pw_para`
-- the same local pseudopotential directory
+Raw output:
 
-### 1. GammaOnly supported path still works after integration
+- `/tmp/final-validation-correctness/007_np6.txt`
 
-Case: `022_PW_CG` modified to:
+Observed final total energy:
 
-- `ecutwfc = 200`
-- `scf_thr = 1e-9`
-- `init_wfc = random`
-- `pw_seed = 1`
+- `-673.8349347004925676 eV`
 
-Run setup:
+Result:
 
-- `mpirun -np 4`
-- one run with full-complex PW
-- one run with `gamma_only = 1`
+- matches the audited `develop` baseline exactly to printed precision
 
-Observed final total energies:
+### 2. `089_PW_get_wf_kpar` stock case (`np=6`)
 
-| Mode | Final total energy (eV) |
-| --- | ---: |
-| full-complex | `-198.3550507424494` |
-| GammaOnly | `-198.3550507394055` |
+Raw output:
 
-Difference:
-
-- about `3.0e-9 eV`
-
-Conclusion:
-
-- The integrated `final` branch preserves the validated GammaOnly correctness on the supported path.
-
-### 2. `089_PW_get_wf_kpar` still produces correct `.cube` outputs
-
-Case: stock `tests/01_PW/089_PW_get_wf_kpar`
-
-Run setup:
-
-- `mpirun -np 6`
+- `/tmp/final-validation-correctness/089_base_np6.txt`
 
 Observed final total energy:
 
@@ -93,132 +65,113 @@ Observed `.cube` integrals:
 - `wfi1s1k2.cube = 19.65846447`
 - `wfi1s1k3.cube = 19.34110139`
 
-These values match the audited `develop` baseline exactly.
+Result:
 
-### 3. `007_PW_UPF201_USPP_Fe` still agrees with the audited baseline
+- matches the earlier audited baseline exactly
 
-Case: stock `tests/01_PW/007_PW_UPF201_USPP_Fe`
+### 3. GammaOnly multi-k all-Gamma case
 
-Run setup:
+Case source:
 
-- `mpirun -np 6`
+- `022_PW_CG` modified to `2` Gamma k-points, `symmetry 0`, `ecutwfc 200`,
+  `init_wfc random`, `pw_seed 1`
 
-Observed final total energy:
+Raw outputs:
 
-- `-673.8349347004925676 eV`
+- `/tmp/final-validation-correctness/gamma_full_np1.txt`
+- `/tmp/final-validation-correctness/gamma_gamma_np1.txt`
+- `/tmp/final-validation-correctness/gamma_full_np4.txt`
+- `/tmp/final-validation-correctness/gamma_gamma_np4.txt`
 
-This matches the audited `develop` baseline exactly.
+Observed final energies:
 
-### 4. Branch-specific OpenMP transform tests still pass after integration
+| Mode | `np=1` (eV) | `np=4` (eV) |
+| --- | ---: | ---: |
+| full-complex | `-198.355050734022` | `-198.3550507340123` |
+| GammaOnly | `-198.3550507115897` | `-198.3550507362148` |
 
-Executed:
+Differences:
 
-```bash
-mpirun -np 1 ./source/source_basis/module_pw/test/MODULE_PW_pw_test \
-  --gtest_filter='PWTEST.transform_omp_threads_*'
-```
+- `np=1`: `+2.2432288915e-08 eV`
+- `np=4`: `-2.2024835289e-09 eV`
 
-Passed:
+Direct log evidence of real GammaOnly activation:
 
-- `PWTEST.transform_omp_threads_complex_roundtrip_consistency`
-- `PWTEST.transform_omp_threads_real_gamma_and_add_consistency`
+- `GammaOnly PW: 2 of 2 k-points are Gamma points. Full GammaOnly mode active (half-spectrum FFT for all k-points).`
 
-Conclusion:
+Storage reduction from the same logs:
 
-- The extra transform-thread-consistency coverage from task 4 remains intact on the merged `final` branch.
+- total plane waves: `12627 -> 6603`
+- `npwx` at `np=4`: `3157 -> 1652`
 
-## Final-branch performance evidence
+Result:
 
-### Benchmark method
+- integrated `final` preserves the audited task-4 correctness path
+- GammaOnly is really active in the merged branch, not silently falling back
 
-- comparison target: audited `develop` baseline from the same machine and same harness
-- launcher: `mpirun -np 6`
-- threads: `OMP_NUM_THREADS=1`
-- repeats: 5 runs per case
+## Performance validation
+
+### Method
+
+- sequential branch-by-branch execution only
 - metric: external wall time from `/usr/bin/time`
-- important note: all measurements cited below were run sequentially, not concurrently
+- repeats: `3`
+- pseudo directory: `tests/PP_ORB`
+- helper script: `/tmp/abacus_repeat_bench.sh`
 
-### Case A: heavy `kpar > 1` benchmark
+Raw directories:
 
-Base case: `089_PW_get_wf_kpar`
+- `/tmp/final-bench-results/develop-036-hi`
+- `/tmp/final-bench-results/final-036-hi`
+- `/tmp/final-bench-results/develop-089-hi`
+- `/tmp/final-bench-results/final-089-hi`
+- `/tmp/final-bench-results/develop-089-xhi`
+- `/tmp/final-bench-results/final-089-xhi`
+- rerun for stability check: `/tmp/final-bench-results/final-089-xhi-rerun`
 
-Modification:
+### Results
 
-- `ecutwfc = 300`
+| Case | `develop` avg wall (s) | `final` avg wall (s) | Delta vs `develop` |
+| --- | ---: | ---: | ---: |
+| `036-hi` (`036_PW_AF`, `ecutwfc=60`, `np=6`) | `2.033333` | `2.040000` | `+0.33%` |
+| `089-hi` (`089_PW_get_wf_kpar`, `ecutwfc=300`, `np=16`) | `4.646667` | `4.706667` | `+1.29%` |
+| `089-xhi` first run (`ecutwfc=600`, `np=12`) | `15.990000` | `17.983333` | `+12.47%` |
+| `089-xhi` rerun (`ecutwfc=600`, `np=12`) | `15.990000` | `16.676667` | `+4.29%` |
 
-Per-run wall times (seconds):
+Energy consistency in all repeated benchmarks:
 
-| Branch | Run 1 | Run 2 | Run 3 | Run 4 | Run 5 | Average |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `develop` | 5.58 | 5.64 | 5.43 | 6.03 | 5.52 | 5.640 |
-| `final` | 5.47 | 5.40 | 5.39 | 5.40 | 5.49 | 5.430 |
+- `036-hi`: exact match
+- `089-hi`: exact match
+- `089-xhi`: exact match
 
-Observed average change:
+### Interpretation
 
-- wall time: `5.640 s -> 5.430 s`
-- relative improvement: about `3.7%`
+- correctness is stable in all repeated runs
+- `036-hi` and `089-hi` are close to neutral, but do not show a speedup on the
+  merged branch in this final audit
+- `089-xhi` shows visible regression relative to current `develop`
+- one of the first `089-xhi` repeats was an outlier (`20.19 s`), so a second
+  `3`-repeat rerun was added; the rerun reduced the regression, but it still did
+  not turn into a win
 
-Same-case correctness check:
+## Conclusion
 
-- final energy matched the audited baseline exactly in every run: `-211.878935664417 eV`
+What is supported by this final integrated audit:
 
-Selected average timers:
+- task-2 / task-4 / task-7 code can coexist in `final` without breaking audited
+  end-to-end correctness
+- GammaOnly multi-k all-Gamma mode remains genuinely active after integration
+- all audited final energies match baseline expectations
 
-| Branch | `PW_Basis_K recip2real` | `PW_Basis_K real2recip` | `Operator hPsi` | `HSolverPW solve` |
-| --- | ---: | ---: | ---: | ---: |
-| `develop` | 1.270 s | 0.792 s | 2.402 s | 2.854 s |
-| `final` | 1.272 s | 0.746 s | 2.324 s | 2.738 s |
+What is **not** supported by this final integrated audit:
 
-Conclusion for Case A:
-
-- The merged `final` branch retains a real end-to-end speedup on the most relevant audited `kpar > 1` heavy benchmark.
-
-### Case B: heavier AF Fe SCF benchmark
-
-Base case: `036_PW_AF`
-
-Modification:
-
-- `ecutwfc = 60`
-
-Per-run wall times (seconds):
-
-| Branch | Run 1 | Run 2 | Run 3 | Run 4 | Run 5 | Average |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `develop` | 2.07 | 2.04 | 2.12 | 2.03 | 2.03 | 2.058 |
-| `final` | 2.07 | 2.07 | 2.11 | 2.07 | 2.08 | 2.080 |
-
-Observed average change:
-
-- wall time: `2.058 s -> 2.080 s`
-- relative change: about `+1.1%`
-
-Same-case correctness check:
-
-- final energy matched the audited baseline exactly in every run: `-6445.671596031703 eV`
-
-Conclusion for Case B:
-
-- The merged `final` branch is essentially neutral on this second heavier SCF benchmark; no meaningful speedup is claimed here.
-
-## Overall conclusion
-
-What is now supported by evidence on the merged `final` branch:
-
-- GammaOnly supported-path correctness is preserved after integration
-- `kpar > 1` wavefunction-output correctness is preserved after integration
-- USPP + `kpar=3` correctness is preserved after integration
-- the added OpenMP transform consistency tests still pass after integration
-- the merged branch retains a modest but real end-to-end speedup on the audited heavy `kpar > 1` benchmark
-
-What is not claimed:
-
-- that every integrated task speeds up every workload
-- that GammaOnly provides end-to-end wall-time speedup
-- that the second heavier AF Fe benchmark shows a meaningful wall-time win
+- a convincing end-to-end performance win for the merged `final` branch
+- a PR-ready claim that integration preserved the branch-level speedups seen in
+  earlier isolated audits
 
 ## Acceptance status
 
-- Final integration correctness: pass
-- Final integration robustness on audited cases: pass
-- Final integration performance: pass, with a real case-specific end-to-end gain retained on the heavy `kpar > 1` benchmark and neutral behavior on the second benchmark
+- Integrated correctness: pass
+- Integrated GammaOnly activation: pass
+- Integrated performance: not yet accepted
+

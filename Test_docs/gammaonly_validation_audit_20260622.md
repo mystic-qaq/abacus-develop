@@ -1,142 +1,144 @@
-# GammaOnly validation audit - 2026-06-22
-
-## Scope
+# GammaOnly Validation Audit - 2026-06-22
 
 Branch: `GammaOnly`
 
-Goal: validate the PW `gamma_only=1` path with end-to-end SCF runs, not only low-level FFT tests, and record both what is supported and what must fall back.
+## Scope
 
-## What changed during this audit
+This audit focuses on task 4 in `01_plane_wave.md`:
 
-- Kept the compact-Gamma fixes that were required for correctness:
-  - global Gamma compact weights for MPI
-  - weighted `<beta|psi>` accumulation in `op_pw_nl.cpp`
-  - weighted CG inner products for the compact Gamma metric
-- Re-tested an experimental CG "conjugate-subspace projection" idea on a real Si/Gamma SCF case and found that it breaks convergence badly. That experiment was removed from the active code path and then deleted.
-- Added conservative guards so that PW GammaOnly is only enabled for the currently validated path:
-  - KPT must be a single Gamma point
-  - `ks_solver` must be `cg`
-  - USPP / double-grid calculations fall back to full-complex PW grids
+- in PW mode, when all k-points are Gamma points,
+- `PW_Basis_K` should keep the GammaOnly half-spectrum path even for multi-k runs,
+- so wavefunction storage is reduced roughly by half.
 
-## Low-level tests
+The key question is not "does a low-level FFT unit test pass", but:
 
-Serial transform tests:
+- does a real SCF run with multiple Gamma k-points converge correctly,
+- and does the log show that the half-spectrum PW path is truly active?
 
-```text
-PWBasisKTEST.SetupTransform
-PWBasisKTEST.ComplexTransformRoundTrip
-PWBasisKTEST.GammaRealForwardMatchesFullComplex
-PWBasisKTEST.GammaProjectedInverseMatchesFullComplex
-PWBasisKTEST.GammaComplexRealSpaceInputIsNotFullComplexEquivalent
-```
+## Validated executable
 
-All 5 tests passed on the current worktree.
+- `build-pw-gamma/abacus_pw_para`
+
+## Test case
+
+Custom SCF case derived from the Si PW Gamma example:
+
+- `2` k-points
+- both k-points are exactly Gamma
+- `symmetry 0`
+- `ecutwfc 200`
+- `init_wfc random`
+- `pw_seed 1`
+
+Compared pairs:
+
+- full-complex PW (`gamma_only 0`)
+- GammaOnly PW (`gamma_only 1`)
 
 ## End-to-end correctness evidence
 
-### 1. Supported path: single-Gamma PW + `ks_solver=cg`
+### 1. `np = 1`
 
-Case: `tests/01_PW/022_PW_CG` (Si, Gamma 1x1x1), modified to `ecutwfc=200`, `init_wfc=random`, `pw_seed=1`.
+Observed final total energies:
 
-Final total energies from `OUT.autotest/running_scf.log`:
+| Mode | Final total energy (eV) |
+| --- | ---: |
+| full-complex | `-198.355050734022` |
+| GammaOnly | `-198.3550507115897` |
 
-| Case | np | gamma_only | Final total energy (eV) |
-| --- | ---: | ---: | ---: |
-| Si Gamma 1x1x1, CG | 1 | 0 | -198.3550507385 |
-| Si Gamma 1x1x1, CG | 1 | 1 | -198.3550507185 |
-| Si Gamma 1x1x1, CG | 4 | 0 | -198.3550507233 |
-| Si Gamma 1x1x1, CG | 4 | 1 | -198.3550507233 |
+Difference:
 
-Observations:
+- `+2.2432288915e-08 eV`
 
-- `np=1` full vs GammaOnly differ by about `2.0e-8 eV`
-- `np=4` full vs GammaOnly match to the printed precision
-- MPI correctness is therefore supported for this validated path
+This is comfortably within roundoff-level agreement for an end-to-end SCF comparison.
 
-### 2. Mixed/Non-Gamma k-points: safe fallback
+### 2. `np = 4`
 
-Case: `tests/01_PW/022_PW_CG` with KPT changed to `2 2 2 0 0 0`, `gamma_only=1` requested.
+Observed final total energies:
 
-| Case | gamma_only request | Final total energy (eV) |
+| Mode | Final total energy (eV) |
+| --- | ---: |
+| full-complex | `-198.3550507340123` |
+| GammaOnly | `-198.3550507362148` |
+
+Difference:
+
+- `-2.2024835289e-09 eV`
+
+MPI execution therefore remains consistent with the serial correctness result.
+
+## Direct evidence that multi-k GammaOnly is really active
+
+From the GammaOnly run log:
+
+- `GammaOnly PW: 2 of 2 k-points are Gamma points. Full GammaOnly mode active (half-spectrum FFT for all k-points).`
+
+This matters because it shows the branch is not merely forcing a single-k Gamma case;
+the multi-k all-Gamma path is actually engaged.
+
+## Storage / plane-wave reduction evidence
+
+### `np = 1`
+
+| Mode | total plane waves | `npwx` |
 | --- | ---: | ---: |
-| Si 2x2x2 k-mesh | 0 | -212.9934339688 |
-| Si 2x2x2 k-mesh | 1, fallback | -212.9934339688 |
+| full-complex | `12627` | `12627` |
+| GammaOnly | `6603` | `6603` |
 
-Conclusion: mixed-k input now safely falls back to full-complex and matches the non-GammaOnly result exactly.
+### `np = 4`
 
-### 3. USPP / double-grid: safe fallback
-
-Case: `tests/01_PW/003_PW_UPF100_USPP_Fe` (Fe USPP), modified to Gamma 1x1x1 and `ks_solver=cg`.
-
-| Case | gamma_only request | Final total energy (eV) |
+| Mode | total plane waves | `npwx` |
 | --- | ---: | ---: |
-| Fe USPP Gamma 1x1x1 | 0 | -2979.0180788015 |
-| Fe USPP Gamma 1x1x1 | 1, fallback | -2979.0180788020 |
+| full-complex | `12627` | `3157` |
+| GammaOnly | `6603` | `1652` |
 
-Conclusion: USPP / double-grid cases now fall back safely; the residual difference is only roundoff-level.
+Observed reduction:
 
-### 4. Davidson solver: safe fallback
+- total plane waves: `47.71%`
+- `npwx` at `np=4`: `47.67%`
 
-Case: `tests/01_PW/023_PW_DA` (Si, Gamma 1x1x1), modified to `ecutwfc=200`, `init_wfc=random`, `pw_seed=1`.
+This is the core performance value currently demonstrated by the branch.
 
-| Case | ks_solver | gamma_only request | Final total energy (eV) |
-| --- | --- | ---: | ---: |
-| Si Gamma 1x1x1 | dav | 0 | -198.3550507383 |
-| Si Gamma 1x1x1 | dav | 1, fallback | -198.3550507383 |
+## Wall-time observation
 
-Important note:
+### `np = 1`
 
-- Before adding the `ks_solver=cg` guard, the GammaOnly + DAV path produced NaNs and non-convergence in real SCF tests.
-- The current branch does not claim DAV support for GammaOnly; it now falls back instead of silently running an incorrect path.
+| Mode | wall time (s) | `recip2real` | `real2recip` | `Operator hPsi` |
+| --- | ---: | ---: | ---: | ---: |
+| full-complex | `5.73` | `2.18` | `1.41` | `3.82` |
+| GammaOnly | `9.11` | `3.80` | `3.03` | `7.56` |
 
-## Performance evidence
+### `np = 4`
 
-### Real gain: memory / plane-wave-count reduction
-
-Same supported Si/Gamma/CG case as above.
-
-| np | gamma_only | total plane waves | npwx | MEMORY FOR PSI |
-| ---: | ---: | ---: | ---: | ---: |
-| 1 | 0 | 12627 | 12627 | 1.15604 MB |
-| 1 | 1 | 6603 | 6603 | 0.604523 MB |
-| 4 | 0 | 12627 | 3157 | 0.289032 MB |
-| 4 | 1 | 6603 | 1652 | 0.151245 MB |
-
-This is a real and reproducible memory benefit of about 48%.
-
-### No demonstrated wall-time speedup yet
-
-For the same validated Si/Gamma/CG case:
-
-| np | gamma_only | wall time | `Operator hPsi` | `PW_Basis_K recip2real` | `PW_Basis_K real2recip` |
-| ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 0 | 1.66 s | 0.84 s / 254 calls | 0.47 s | 0.31 s |
-| 1 | 1 | 3.10 s | 2.31 s / 1022 calls | 1.15 s | 0.86 s |
-| 4 | 0 | 1.33 s | 0.57 s / 254 calls | 0.28 s | 0.25 s |
-| 4 | 1 | 1.89 s | 1.33 s / 934 calls | 0.55 s | 0.65 s |
+| Mode | wall time (s) | `recip2real` | `real2recip` | `Operator hPsi` |
+| --- | ---: | ---: | ---: | ---: |
+| full-complex | `1.62` | `0.46` | `0.36` | `0.83` |
+| GammaOnly | `2.96` | `0.98` | `0.98` | `2.13` |
 
 Interpretation:
 
-- GammaOnly clearly reduces storage and local `npwx`
-- But the current compact-metric CG path still needs more iterative diagonalization work than the full-complex baseline
-- Therefore this branch currently demonstrates a genuine memory benefit, but not an end-to-end wall-time speedup
+- the branch clearly wins on storage
+- on the current test machine it does **not** yet win on wall time
+- the extra solver / transform work still outweighs the compact-storage benefit in this case
 
-## Rejected experiment
+## What is and is not claimed
 
-During this audit, a CG-side projection onto the explicit Gamma conjugate manifold was tested. On the real case above it caused severe correctness regressions:
+Claimed:
 
-- SCF failed to converge within 100 steps
-- energies dropped to obviously unphysical values (down to about `-237 eV` on the Si test)
-- `hPsi` calls exploded from hundreds to tens of thousands
+- multi-k all-Gamma PW correctness
+- real half-spectrum storage reduction in end-to-end runs
+- MPI consistency (`np=1` and `np=4`)
 
-That experiment was removed and is not part of the current result.
+Not claimed:
 
-## Acceptance status for the current branch state
+- mixed gamma/non-gamma PW wavefunction support in one run
+- end-to-end wall-time speedup
+- support for every solver/backend combination without fallback
 
-- Supported path `single Gamma + PW + ks_solver=cg`: pass
-- MPI correctness on the supported path: pass (`np=1` and `np=4` re-verified in this audit)
-- Mixed-k path: safe fallback, pass
-- USPP / double-grid path: safe fallback, pass
-- DAV path: not supported directly; safe fallback, pass
-- End-to-end wall-time speedup: not demonstrated
-- End-to-end memory reduction: demonstrated
+## Acceptance summary
+
+- Task alignment: pass for the all-Gamma multi-k target
+- End-to-end correctness: pass
+- MPI correctness: pass
+- Storage reduction: pass
+- Wall-time speedup: not demonstrated

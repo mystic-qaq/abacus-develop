@@ -1,29 +1,29 @@
-# GammaOnly validation report
+# GammaOnly Validation Report
 
 Date: 2026-06-22
 
-This file is a short front page. The detailed end-to-end audit is:
+Branch: `GammaOnly`
+
+## Front-page conclusion
+
+This branch now supports the task-4 target that matters most:
+
+- PW mode
+- multiple k-points
+- all k-points are Gamma points
+- `PW_Basis_K` stays on the half-spectrum storage path
+
+What is demonstrated:
+
+- end-to-end correctness on a real SCF case with `2` Gamma k-points
+- real storage reduction of about `47.7%`
+- exact log evidence that the multi-k GammaOnly path is active
+
+What is not claimed:
+
+- wall-time speedup on the current test machine
+- mixed gamma/non-gamma k-point support inside the same PW wavefunction run
+
+Detailed evidence is recorded in:
 
 - `Test_docs/gammaonly_validation_audit_20260622.md`
-
-## Current validated status
-
-- Supported path: `PW + single Gamma KPT + ks_solver=cg`
-- Re-verified end-to-end on real SCF cases for `np=1` and `np=4`
-- Mixed-k inputs: safe fallback to full-complex
-- USPP / double-grid inputs: safe fallback to full-complex
-- `ks_solver=dav`: safe fallback to full-complex
-
-## What is and is not claimed
-
-- Claimed:
-  - end-to-end correctness for the supported CG path
-  - safe fallback for unsupported paths
-  - real memory reduction for the supported path
-- Not claimed:
-  - end-to-end wall-time speedup
-  - direct GammaOnly support for DAV
-
-## Important audit outcome
-
-An experimental CG-side conjugate-subspace projection was tested during this audit and rejected because it caused severe end-to-end correctness regressions on a real Si/Gamma SCF case. The current branch state does not use that projection.
