@@ -1,5 +1,0 @@
-case,reference_config,compare_config,reference_etot_ev,compare_etot_ev,abs_diff_ev,reference_drho,compare_drho,status
-nacl_multik_1x1x2,np1_omp1,np4_omp1,-1229.8316890476135086,-1229.8316890476028220,1.068656e-11,7.39927e-11,7.49786e-11,pass
-si_gamma_1x1x1,np1_omp1,np4_omp1,-196.4803276757865,-196.4803276338421,4.194439e-08,9.85893e-11,1.46886e-10,pass
-si_mixed_direct_gamma_plus_k,np1_omp1,np4_omp1,-201.5730386213709,-201.5730386222985,9.275993e-10,2.98528e-10,1.94221e-11,pass
-si_multik_2x2x2,np1_omp1,np4_omp1,-261.1123684719249,-261.1123684719171,7.844392e-12,7.35385e-10,7.35385e-10,pass
