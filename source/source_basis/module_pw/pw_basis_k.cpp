@@ -227,6 +227,7 @@ void PW_Basis_K::setupIndGk()
     this->igl2isz_k = new int[this->nks * this->npwk_max];
     delete[] igl2ig_k;
     this->igl2ig_k = new int[this->nks * this->npwk_max];
+    this->igl2gamma_weight_k.assign(this->nks * this->npwk_max, 1.0);
     for (int ik = 0; ik < this->nks; ik++)
     {
         int igl = 0;
@@ -238,6 +239,18 @@ void PW_Basis_K::setupIndGk()
                 this->igl2isz_k[ik * npwk_max + igl] = this->ig2isz[ig];
                 this->igl2ig_k[ik * npwk_max + igl] = ig;
                 ++igl;
+            }
+        }
+    }
+    if (this->gamma_only && this->gamma_compact.is_initialized())
+    {
+        for (int ik = 0; ik < this->nks; ++ik)
+        {
+            for (int igl = 0; igl < this->npwk[ik]; ++igl)
+            {
+                const int ig = this->igl2ig_k[ik * this->npwk_max + igl];
+                this->igl2gamma_weight_k[ik * this->npwk_max + igl]
+                    = this->gamma_compact.conjugate_weight(ig);
             }
         }
     }
@@ -291,6 +304,10 @@ void PW_Basis_K::setuptransform()
     this->distribute_r();
     this->distribute_g();
     this->getstartgr();
+    if (this->gamma_only)
+    {
+        this->gamma_compact.initialize(this);
+    }
     this->setupIndGk();
     this->fft_bundle.clear();
     std::string fft_device = this->device;
@@ -551,6 +568,15 @@ int& PW_Basis_K::getigl2isz(const int ik, const int igl) const
 int& PW_Basis_K::getigl2ig(const int ik, const int igl) const
 {
     return this->igl2ig_k[ik * this->npwk_max + igl];
+}
+
+double PW_Basis_K::get_gamma_weight(const int ik, const int igl) const
+{
+    if (this->igl2gamma_weight_k.empty())
+    {
+        return 1.0;
+    }
+    return this->igl2gamma_weight_k[ik * this->npwk_max + igl];
 }
 
 void PW_Basis_K::get_ig2ixyz_k()

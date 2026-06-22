@@ -87,7 +87,7 @@ class GammaCompact
      */
     double conjugate_weight(int ig) const
     {
-        return self_conj_[ig] ? 1.0 : 2.0;
+        return conjugate_weight_[ig];
     }
 
     /**
@@ -135,12 +135,20 @@ class GammaCompact
         return (ig_full >= 0 && ig_full < npw_full_) ? conj_of_[ig_full] : -1;
     }
 
+    /// Map: compact index -> compact index of -G, or -1 when -G is omitted from compact storage.
+    int compact_conjugate(int ic) const
+    {
+        return (ic >= 0 && ic < npw_compact_) ? compact_conj_[ic] : -1;
+    }
+
   private:
     bool initialized_ = false;
     int npw_compact_ = 0;                     ///< Half-spectrum plane-wave count (= PW_Basis::npw)
     int npw_full_ = 0;                        ///< Full-spectrum plane-wave count
     int num_self_conj_ = 0;                   ///< Number of self-conjugate G vectors
     std::vector<bool> self_conj_;             ///< [npw_compact] per-compact-index self-conjugate flag
+    std::vector<double> conjugate_weight_;     ///< [npw_compact] 2 if -G is omitted from compact storage, otherwise 1
+    std::vector<int> compact_conj_;            ///< [npw_compact] compact partner of -G, self for self-conjugate, -1 if omitted
     std::vector<int> c2f_;                    ///< [npw_compact] compact -> full index map
     std::vector<int> f2c_;                    ///< [npw_full] full -> compact index map (-1 = conjugate partner)
     std::vector<int> conj_of_;                ///< [npw_full] full -> full index of canonical partner (-1 = self)

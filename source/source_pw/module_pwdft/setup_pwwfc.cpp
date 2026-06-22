@@ -53,7 +53,13 @@ void pw::setup_pwwfc(const Input_para& inp,
 			pw_rho.ny,
 			pw_rho.nz);
 
-    pw_wfc->initparameters(PARAM.globalv.gamma_only_pw, inp.ecutwfc, kv.get_nks(), kv.kvec_d.data());
+    const bool gamma_only_wfc = PARAM.globalv.gamma_only_pw && !PARAM.globalv.double_grid;
+    if (PARAM.globalv.gamma_only_pw && PARAM.globalv.double_grid)
+    {
+        GlobalV::ofs_running << " WARNING : PW GammaOnly with USPP/double-grid wavefunctions is not supported yet; "
+                             << "use full-complex wavefunction grids." << std::endl;
+    }
+    pw_wfc->initparameters(gamma_only_wfc, inp.ecutwfc, kv.get_nks(), kv.kvec_d.data());
 #ifdef __MPI
     if (inp.pw_seed > 0)
     {
@@ -66,7 +72,7 @@ void pw::setup_pwwfc(const Input_para& inp,
     pw_wfc->setuptransform();
 
     // GammaOnly diagnostic: log how many k-points are Gamma points
-    if (PARAM.globalv.gamma_only_pw && pw_wfc->is_gamma_k != nullptr)
+    if (gamma_only_wfc && pw_wfc->is_gamma_k != nullptr)
     {
         int num_gamma_k = 0;
         for (int ik = 0; ik < kv.get_nks(); ++ik)
@@ -99,4 +105,3 @@ void pw::setup_pwwfc(const Input_para& inp,
 
     return;
 }
-

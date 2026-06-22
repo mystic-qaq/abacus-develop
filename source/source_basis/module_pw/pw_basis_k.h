@@ -94,6 +94,7 @@ public:
 
     int *igl2isz_k=nullptr, * d_igl2isz_k = nullptr; //[npwk_max*nks] map (igl,ik) to (is,iz)
     int *igl2ig_k=nullptr;//[npwk_max*nks] map (igl,ik) to ig
+    std::vector<double> igl2gamma_weight_k; ///< [npwk_max*nks] compact Gamma inner-product weight
     int *ig2ixyz_k=nullptr; ///< [npw] map ig to ixyz
     std::vector<int> ig2ixyz_k_cpu; /// [npw] map ig to ixyz,which is used in dsp fft.
     double *gk2=nullptr; // modulus (G+K)^2 of G vectors [npwk_max*nks]
@@ -336,6 +337,7 @@ public:
     int& getigl2isz(const int ik, const int igl) const;
     //get igl2ig_k or igk(ik,ig) in older ABACUS
     int& getigl2ig(const int ik, const int igl) const;
+    double get_gamma_weight(const int ik, const int igl) const;
 
     //get ig_to_ix
     std::vector<int> get_ig2ix(const int ik) const;

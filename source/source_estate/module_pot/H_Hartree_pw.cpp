@@ -55,7 +55,8 @@ ModuleBase::matrix H_Hartree_pw::v_hartree(const UnitCell &cell,
             continue; // skip G=0
         }
         const double fac = ModuleBase::e2 * ModuleBase::FOUR_PI / (cell.tpiba2 * rho_basis->gg[ig]);
-        ehart += (conj(Porter[ig]) * Porter[ig]).real() * fac;
+        const double weight = rho_basis->gamma_only ? rho_basis->gamma_compact.conjugate_weight(ig) : 1.0;
+        ehart += weight * (conj(Porter[ig]) * Porter[ig]).real() * fac;
         vh_g[ig] = fac * Porter[ig];
         
     }

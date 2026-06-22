@@ -59,6 +59,12 @@ void pw::setup_pwrho(
     // initialize pw_big
     pw_big = static_cast<ModulePW::PW_Basis_Big*>(pw_rhod);
     pw_big->setbxyz(inp.bx, inp.by, inp.bz);
+    const bool gamma_only_rho = PARAM.globalv.gamma_only_pw && !double_grid;
+    if (PARAM.globalv.gamma_only_pw && double_grid)
+    {
+        GlobalV::ofs_running << " WARNING : PW GammaOnly with USPP/double-grid rho is not supported yet; "
+                             << "use full-complex rho grids." << std::endl;
+    }
 
     //! initialie the plane wave basis for rho
 #ifdef __MPI
@@ -81,7 +87,7 @@ void pw::setup_pwrho(
         pw_rho->initgrids(inp.ref_cell_factor * ucell.lat0, ucell.latvec, inp.nx, inp.ny, inp.nz);
     }
 
-    pw_rho->initparameters(PARAM.globalv.gamma_only_pw, 4.0 * inp.ecutwfc);
+    pw_rho->initparameters(gamma_only_rho, 4.0 * inp.ecutwfc);
     pw_rho->fft_bundle.initfftmode(inp.fft_mode);
     pw_rho->setuptransform();
     pw_rho->collect_local_pw();
@@ -106,7 +112,7 @@ void pw::setup_pwrho(
         {
             pw_rhod->initgrids(inp.ref_cell_factor * ucell.lat0, ucell.latvec, inp.ndx, inp.ndy, inp.ndz);
         }
-        pw_rhod->initparameters(PARAM.globalv.gamma_only_pw, inp.ecutrho);
+        pw_rhod->initparameters(gamma_only_rho, inp.ecutrho);
         pw_rhod->fft_bundle.initfftmode(inp.fft_mode);
         pw_rhod_sup->setuptransform(pw_rho);
         pw_rhod->collect_local_pw();
@@ -139,4 +145,3 @@ void pw::teardown_pwrho(bool &pw_rho_flag,
 
    return;
 }
-
