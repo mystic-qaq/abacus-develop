@@ -51,13 +51,7 @@ void PW_Basis_K::real2recip(const std::complex<FPTYPE>* in,
     }
     else
     {
-#ifdef _OPENMP
-#pragma omp parallel for schedule(static)
-#endif
-        for (int ir = 0; ir < this->nrxx; ++ir)
-        {
-            auxr[ir] = in[ir];
-        }
+        detail::copy_complex_buffer_parallel(in, auxr, this->nrxx);
         this->fft_bundle.fftxyfor(auxr, auxr);
     }
 

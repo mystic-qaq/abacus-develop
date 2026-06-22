@@ -84,30 +84,17 @@ void PW_Basis::count_pw_st(
         }
     }
 
-    this->liy = this->riy = 0;
-    this->lix = this->rix = 0;
-    this->npwtot = 0;
-    this->nstot = 0;
-
-    const int nx = this->nx;
-    const int ny = this->ny;
-    const int fftny = this->fftny;
-    const double ggecut = this->ggecut;
-    const bool full_pw = this->full_pw;
-    const ModuleBase::Matrix3 GGT = this->GGT;
-
-    // Thread-local accumulators for OpenMP reduction
-    int tot_npw = 0, tot_nst = 0;
-    int t_lix = ix_start, t_rix = ix_end, t_liy = iy_start, t_riy = iy_end;
-    ModuleBase::Vector3<double> f;
+    int npwtot_local = 0;
+    int nstot_local = 0;
+    int lix_local = 0, rix_local = 0;
+    int liy_local = 0, riy_local = 0;
 
 #ifdef _OPENMP
-#pragma omp parallel reduction(+:tot_npw, tot_nst) private(f)
-{
-    // Initialize thread-local bounds: min starts large, max starts small
-    int loc_rix = ix_end, loc_lix = ix_start;
-    int loc_riy = iy_end, loc_liy = iy_start;
-#pragma omp for nowait
+    #pragma omp parallel for collapse(1) \
+        shared(st_length2D, st_bottom2D) \
+        reduction(+: npwtot_local, nstot_local) \
+        reduction(min: rix_local, riy_local) \
+        reduction(max: lix_local, liy_local)
 #endif
     for (int ix = ix_start; ix <= ix_end; ++ix)
     {
@@ -116,55 +103,53 @@ void PW_Basis::count_pw_st(
             // we shift all sticks to the first quadrant in x-y plane here.
             int x = ix;
             int y = iy;
-            if (x < 0) { x += nx; }
-            if (y < 0) { y += ny; }
-            int index = x * fftny + y;
+            if (x < 0) { x += this->nx; }
+            if (y < 0) { y += this->ny; }
+            int index = x * this->fftny + y;
 
             int length = 0; // number of planewave on stick (x, y).
+
+            ModuleBase::Vector3<double> f;
+            f.x = ix;
+            f.y = iy;
+
             for (int iz = iz_start; iz <= iz_end; ++iz)
             {
-                f.x = ix;
-                f.y = iy;
                 f.z = iz;
                 double modulus = f * (GGT * f);
-                if (modulus <= ggecut || full_pw)
+                if (modulus <= this->ggecut || this->full_pw)
                 {
-                    if (length == 0) { st_bottom2D[index] = iz; }
-                    ++tot_npw;
+                    if (length == 0)
+                    {
+                        st_bottom2D[index] = iz; // length == 0 means this point is the bottom of stick (x, y).
+                    }
+                    ++npwtot_local;
                     ++length;
-                    if (iy < loc_riy) { loc_riy = iy; }
-                    if (iy > loc_liy) { loc_liy = iy; }
-                    if (ix < loc_rix) { loc_rix = ix; }
-                    if (ix > loc_lix) { loc_lix = ix; }
+                    if(ix > lix_local) { lix_local = ix; }
+                    if(ix < rix_local) { rix_local = ix; }
+                    if(iy > liy_local) { liy_local = iy; }
+                    if(iy < riy_local) { riy_local = iy; }
                 }
             }
             if (length > 0)
             {
                 st_length2D[index] = length;
-                ++tot_nst;
+                ++nstot_local;
             }
         }
     }
-#ifdef _OPENMP
-    // Merge thread-local boundary extents: min for riy/rix, max for liy/lix
-#pragma omp critical
-    {
-        if (loc_riy < t_riy) { t_riy = loc_riy; }
-        if (loc_liy > t_liy) { t_liy = loc_liy; }
-        if (loc_rix < t_rix) { t_rix = loc_rix; }
-        if (loc_lix > t_lix) { t_lix = loc_lix; }
-    }
-}
-#endif
 
-    this->npwtot = tot_npw;
-    this->nstot = tot_nst;
-    this->riy = t_riy;
-    this->liy = t_liy;
-    this->rix = t_rix;
-    this->lix = t_lix;
-    riy += ny;
-    rix += nx;
+    if (npwtot_local == 0)  // no planewave
+    {
+        lix_local = rix_local = liy_local = riy_local = 0;
+    }
+
+    this->npwtot = npwtot_local;
+    this->nstot = nstot_local;
+    this->lix = lix_local;
+    this->rix = rix_local + this->nx;
+    this->liy = liy_local;
+    this->riy = riy_local + this->ny;
     return;
 }
 
