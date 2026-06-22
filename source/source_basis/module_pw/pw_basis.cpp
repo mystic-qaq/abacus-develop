@@ -80,9 +80,11 @@ void PW_Basis::setuptransform()
 
 void PW_Basis::getstartgr()
 {
-    if(this->gamma_only)    
+    if(this->gamma_only)
     {
-        this->nmaxgr = ( this->npw > (this->nrxx+1)/2 ) ? this->npw : (this->nrxx+1)/2;
+        // Gamma-only stores fewer reciprocal coefficients, but real-space
+        // transforms still use nrxx entries.
+        this->nmaxgr = ( this->npw > this->nrxx ) ? this->npw : this->nrxx;
     }
     else
     {

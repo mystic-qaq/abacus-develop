@@ -54,6 +54,7 @@ class DiagoCG final
                 const std::vector<double>& ethr_band,
                 const Real* prec = nullptr);
 
+    void set_inner_product_weights(const std::vector<Real>& weights);
   private:
     Device * ctx_ = {};
     /// static variables, used for passing control variables
@@ -127,6 +128,9 @@ class DiagoCG final
 
     void schmit_orth(const int& m, const ct::Tensor& psi, const ct::Tensor& sphi, ct::Tensor& phi_m);
 
+    Real inner_product(const int& dim, const T* psi_L, const T* psi_R, const bool reduce = true) const;
+
+    void apply_inner_product_weights(const ct::Tensor& in, ct::Tensor& out) const;
     // used in diag() for template replace Hamilt with Hamilt_PW
     void diag_once(const ct::Tensor& prec,
                    ct::Tensor& psi,
@@ -137,6 +141,7 @@ class DiagoCG final
 
     using dot_real_op = ModuleBase::dot_real_op<T, Device>;
     const T * one_ = nullptr, * zero_ = nullptr, * neg_one_ = nullptr;
+    std::vector<Real> inner_product_weights_;
 };
 
 } // namespace hsolver

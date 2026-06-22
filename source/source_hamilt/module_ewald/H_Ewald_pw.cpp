@@ -111,18 +111,6 @@ double H_Ewald_pw::compute_ewald(const UnitCell& cell,
         ewaldg = 0.0;
     }
 
-	// in plane wave basis, only use k=0 point is not 
-	// called "gamma_only", only if the wave functions
-	// are stored as double type, the gamma_only = true. 
-	// I don't know why "gamma_only" in plane wave 
-	// makes the fact below is 2, that's a little complicated
-	// to understand. I think that may because only half
-	// the G vectors are used. Unfortunately implement the 
-	// function hasn't in my plan list yet.
-	//
-	// but that's not the term "gamma_only" I want to use in LCAO,  
-	fact = 1.0;
-
     //GlobalV::ofs_running << "\n pwb.gstart = " << pwb.gstart << std::endl;
     const int ig0 = rho_basis->ig_gge0;
     for (int ig = 0; ig < rho_basis->npw; ig++)
@@ -138,6 +126,7 @@ double H_Ewald_pw::compute_ewald(const UnitCell& cell,
                 rhon += static_cast<double>(cell.atoms[it].ncpp.zv) * conj(strucFac(it, ig));
             }
         }
+        fact = rho_basis->gamma_only ? rho_basis->gamma_compact.conjugate_weight(ig) : 1.0;
         ewaldg += fact * std::abs(rhon) * std::abs(rhon)
                   * exp(- rho_basis->gg[ig] * cell.tpiba2 / alpha / 4.0 ) / rho_basis->gg[ig] / cell.tpiba2;
     }

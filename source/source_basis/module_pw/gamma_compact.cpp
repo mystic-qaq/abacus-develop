@@ -23,6 +23,19 @@ void GammaCompact::initialize(const PW_Basis* pw_basis)
     const int* ig2isz = pw_basis->ig2isz;
     const int* is2fftixy = pw_basis->is2fftixy;
 
+    auto to_signed = [](int c, const int n) -> int
+    {
+        if (c >= n / 2 + 1)
+        {
+            c -= n;
+        }
+        return c;
+    };
+    auto neg_signed = [&to_signed](const int c, const int n) -> int
+    {
+        return to_signed(((-c % n) + n) % n, n);
+    };
+
     // Build a map from signed (ix, iy, iz) to compact ig.
     // Key: ((ix + offset) | ((iy + offset) << 20) | ((iz + offset) << 40))
     const int64_t offset = static_cast<int64_t>(std::max({nx, ny, nz})) + 2;
@@ -95,13 +108,14 @@ void GammaCompact::initialize(const PW_Basis* pw_basis)
         if (!self_conj_[ig])
         {
             // Check if -G is also in the compact set.
-            int neg_ix = -gx[ig];
-            int neg_iy = -gy[ig];
-            int neg_iz = -gz[ig];
-            int64_t neg_key = make_key(neg_ix, neg_iy, neg_iz);
-            auto it = coord_to_ig.find(neg_key);
+        int neg_ix = neg_signed(gx[ig], nx);
+        int neg_iy = neg_signed(gy[ig], ny);
+        int neg_iz = neg_signed(gz[ig], nz);
+        int64_t neg_key = make_key(neg_ix, neg_iy, neg_iz);
+        auto it = coord_to_ig.find(neg_key);
+        const bool neg_is_compact_global = xprime ? (neg_ix >= 0) : (neg_iy >= 0);
 
-            if (it == coord_to_ig.end())
+            if (it == coord_to_ig.end() && !neg_is_compact_global)
             {
                 // -G is not canonical; reserve an extra slot for it.
                 ++full_idx;
@@ -115,6 +129,8 @@ void GammaCompact::initialize(const PW_Basis* pw_basis)
     // Step 3: Build f2c_ and conj_of_ arrays.
     f2c_.assign(npw_full_, -1);
     conj_of_.assign(npw_full_, -1);
+    conjugate_weight_.assign(npw_compact_, 1.0);
+    compact_conj_.assign(npw_compact_, -1);
 
     for (int ig = 0; ig < npw_compact_; ++ig)
     {
@@ -124,14 +140,16 @@ void GammaCompact::initialize(const PW_Basis* pw_basis)
         if (self_conj_[ig])
         {
             conj_of_[canonical_full] = -1;
+            compact_conj_[ig] = ig;
         }
         else
         {
-            int neg_ix = -gx[ig];
-            int neg_iy = -gy[ig];
-            int neg_iz = -gz[ig];
+            int neg_ix = neg_signed(gx[ig], nx);
+            int neg_iy = neg_signed(gy[ig], ny);
+            int neg_iz = neg_signed(gz[ig], nz);
             int64_t neg_key = make_key(neg_ix, neg_iy, neg_iz);
             auto it = coord_to_ig.find(neg_key);
+            const bool neg_is_compact_global = xprime ? (neg_ix >= 0) : (neg_iy >= 0);
 
             if (it != coord_to_ig.end())
             {
@@ -139,6 +157,15 @@ void GammaCompact::initialize(const PW_Basis* pw_basis)
                 int conj_compact_ig = it->second;
                 int conj_full = c2f_[conj_compact_ig];
                 conj_of_[canonical_full] = conj_full;
+                conjugate_weight_[ig] = 1.0;
+                compact_conj_[ig] = conj_compact_ig;
+            }
+            else if (neg_is_compact_global)
+            {
+                // The conjugate compact G exists globally but is owned by
+                // another MPI rank. This local rank must not double-count it.
+                conj_of_[canonical_full] = -1;
+                conjugate_weight_[ig] = 1.0;
             }
             else
             {
@@ -148,6 +175,7 @@ void GammaCompact::initialize(const PW_Basis* pw_basis)
                 conj_of_[canonical_full] = conj_full;
                 // f2c_[conj_full] stays -1 (non-canonical slot)
                 conj_of_[conj_full] = canonical_full;
+                conjugate_weight_[ig] = 2.0;
             }
         }
     }

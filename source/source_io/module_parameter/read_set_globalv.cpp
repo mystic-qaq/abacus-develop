@@ -3,8 +3,66 @@
 #include "source_base/global_variable.h"
 #include "source_base/tool_quit.h"
 #include "source_io/module_parameter/parameter.h"
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <fstream>
 namespace ModuleIO
 {
+namespace
+{
+bool is_pw_gamma_only_kpt(const std::string& kpoint_file)
+{
+    std::ifstream ifs(kpoint_file);
+    if (!ifs.good())
+    {
+        return true;
+    }
+
+    std::string header;
+    int nks = 0;
+    std::string mode;
+    if (!(ifs >> header >> nks >> mode))
+    {
+        return false;
+    }
+    std::transform(mode.begin(), mode.end(), mode.begin(), ::tolower);
+
+    if (nks == 0)
+    {
+        int nkx = 0;
+        int nky = 0;
+        int nkz = 0;
+        double sx = 0.0;
+        double sy = 0.0;
+        double sz = 0.0;
+        if (!(ifs >> nkx >> nky >> nkz >> sx >> sy >> sz))
+        {
+            return false;
+        }
+        return mode == "gamma" && nkx == 1 && nky == 1 && nkz == 1 && std::abs(sx) < 1e-12
+               && std::abs(sy) < 1e-12 && std::abs(sz) < 1e-12;
+    }
+
+    for (int ik = 0; ik < nks; ++ik)
+    {
+        double kx = 0.0;
+        double ky = 0.0;
+        double kz = 0.0;
+        double weight = 0.0;
+        if (!(ifs >> kx >> ky >> kz >> weight))
+        {
+            return false;
+        }
+        if (std::abs(kx) > 1e-12 || std::abs(ky) > 1e-12 || std::abs(kz) > 1e-12)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+} // namespace
+
 /// @note Here para.inp has been synchronized of all ranks.
 ///       All para.inp have the same value.
 void ReadInput::set_globalv(const Input_para& inp, System_para& sys)
@@ -19,6 +77,12 @@ void ReadInput::set_globalv(const Input_para& inp, System_para& sys)
         else if (inp.basis_type == "pw")
         {
             sys.gamma_only_pw = true;
+            if (!is_pw_gamma_only_kpt(inp.kpoint_file))
+            {
+                GlobalV::ofs_running << " WARNING : PW GammaOnly currently requires a single Gamma k-point; "
+                                     << "fallback to full-complex plane-wave grids." << std::endl;
+                sys.gamma_only_pw = false;
+            }
         }
     }
     if (sys.gamma_only_local)
@@ -34,6 +98,13 @@ void ReadInput::set_globalv(const Input_para& inp, System_para& sys)
         if (inp.esolver_type == "tddft")
         {
             GlobalV::ofs_running << " WARNING : gamma_only is not applicable for tddft" << std::endl;
+            sys.gamma_only_pw = false;
+        }
+        else if (inp.ks_solver != "cg")
+        {
+            GlobalV::ofs_running
+                << " WARNING : PW GammaOnly is currently validated only with ks_solver=cg; "
+                << "fallback to full-complex plane-wave grids." << std::endl;
             sys.gamma_only_pw = false;
         }
     }

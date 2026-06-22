@@ -8,9 +8,87 @@
 #include "source_base/global_variable.h"
 #include "source_io/module_parameter/parameter.h"
 
+#include <algorithm>
+#include <cstdint>
+#include <map>
+#include <type_traits>
+
 #ifdef __MPI
 #include "source_base/parallel_reduce.h"
 #endif
+
+namespace
+{
+template <typename U>
+typename std::enable_if<!std::is_same<U, std::complex<double>>::value
+                            && !std::is_same<U, std::complex<float>>::value,
+                        void>::type
+enforce_gamma_conjugacy(U*, const ModulePW::PW_Basis_K*, const int, const int)
+{
+}
+
+template <typename U>
+typename std::enable_if<std::is_same<U, std::complex<double>>::value
+                            || std::is_same<U, std::complex<float>>::value,
+                        void>::type
+enforce_gamma_conjugacy(U* psi_slice, const ModulePW::PW_Basis_K* pw_wfc, const int ik, const int ng)
+{
+    if (pw_wfc == nullptr || !pw_wfc->gamma_only || pw_wfc->is_gamma_k == nullptr || !pw_wfc->is_gamma_k[ik]
+        || pw_wfc->gcar == nullptr)
+    {
+        return;
+    }
+
+    const int nx = pw_wfc->nx;
+    const int ny = pw_wfc->ny;
+    const int nz = pw_wfc->nz;
+    const int64_t offset = static_cast<int64_t>(std::max(nx, std::max(ny, nz))) + 2;
+    auto make_key = [offset](const int ix, const int iy, const int iz) -> int64_t
+    {
+        return (static_cast<int64_t>(ix + offset))
+               | (static_cast<int64_t>(iy + offset) << 20)
+               | (static_cast<int64_t>(iz + offset) << 40);
+    };
+    auto self_conjugate = [nx, ny, nz](const int ix, const int iy, const int iz) -> bool
+    {
+        auto self = [](const int c, const int n) -> bool
+        {
+            const int cmod = ((c % n) + n) % n;
+            const int nmod = ((-c % n) + n) % n;
+            return cmod == nmod;
+        };
+        return self(ix, nx) && self(iy, ny) && self(iz, nz);
+    };
+
+    std::map<int64_t, int> g_to_ig;
+    std::vector<ModuleBase::Vector3<double>> gdirect(ng);
+    for (int ig = 0; ig < ng; ++ig)
+    {
+        gdirect[ig] = pw_wfc->getgdirect(ik, ig);
+        g_to_ig[make_key(static_cast<int>(gdirect[ig].x),
+                         static_cast<int>(gdirect[ig].y),
+                         static_cast<int>(gdirect[ig].z))] = ig;
+    }
+
+    for (int ig = 0; ig < ng; ++ig)
+    {
+        const int ix = static_cast<int>(gdirect[ig].x);
+        const int iy = static_cast<int>(gdirect[ig].y);
+        const int iz = static_cast<int>(gdirect[ig].z);
+        if (self_conjugate(ix, iy, iz))
+        {
+            psi_slice[ig] = U(psi_slice[ig].real(), 0.0);
+            continue;
+        }
+
+        const auto partner = g_to_ig.find(make_key(-ix, -iy, -iz));
+        if (partner != g_to_ig.end() && ig < partner->second)
+        {
+            psi_slice[partner->second] = std::conj(psi_slice[ig]);
+        }
+    }
+}
+} // namespace
 
 template <typename T>
 void psi_initializer<T>::initialize(const Structure_Factor* sf,
@@ -126,6 +204,7 @@ void psi_initializer<T>::random_t(T* psi, const int iw_start, const int iw_end, 
                 {
                     psi_slice[ig] = static_cast<T>(0.0);
                 }
+                enforce_gamma_conjugacy(psi_slice, this->pw_wfc_, ik, ng);
                 psi_slice += npwk_max; // move to the next polarization
             }
         }
@@ -146,6 +225,7 @@ void psi_initializer<T>::random_t(T* psi, const int iw_start, const int iw_end, 
                 psi_slice[ig] = this->template cast_to_T<T>(
                     std::complex<double>(rr * cos(arg) / (gk2 + 1.0), rr * sin(arg) / (gk2 + 1.0)));
             }
+            enforce_gamma_conjugacy(psi_slice, this->pw_wfc_, ik, ng);
             if (npol == 2)
             {
                 for (int ig = npwk_max; ig < npwk_max + ng; ig++)
@@ -156,6 +236,7 @@ void psi_initializer<T>::random_t(T* psi, const int iw_start, const int iw_end, 
                     psi_slice[ig] = this->template cast_to_T<T>(
                         std::complex<double>(rr * cos(arg) / (gk2 + 1.0), rr * sin(arg) / (gk2 + 1.0)));
                 }
+                enforce_gamma_conjugacy(psi_slice + npwk_max, this->pw_wfc_, ik, ng);
             }
         }
     }
@@ -175,6 +256,7 @@ void psi_initializer<T>::random_t(T* psi, const int iw_start, const int iw_end, 
                     const Real inv_gk2 = 1.0 / (gk2 + 1.0);
                     psi_slice[ig] *= inv_gk2;
                 }
+                enforce_gamma_conjugacy(psi_slice, this->pw_wfc_, ik, ng);
                 psi_slice += npwk_max;
             }
         }

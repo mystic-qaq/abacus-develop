@@ -5,6 +5,7 @@
 #include "source_base/parallel_reduce.h"
 #include "source_base/tool_quit.h"
 
+#include <vector>
 
 namespace hamilt {
 
@@ -238,6 +239,25 @@ void Nonlocal<OperatorPW<T, Device>>::act(
             resmem_complex_op()(this->becp, nbands * nkb, "Nonlocal<PW>::becp");
         }
         // ModuleBase::ComplexMatrix becp(nbands, nkb, false);
+        const T* psi_for_becp = tmpsi_in;
+        const bool gamma_compact_wfc = this->wfcpw != nullptr && this->wfcpw->gamma_only
+                                       && this->wfcpw->gamma_compact.is_initialized();
+        if (gamma_compact_wfc)
+        {
+            static thread_local std::vector<T> weighted_psi;
+            weighted_psi.resize(nbands * this->max_npw);
+            for (int ib = 0; ib < nbands; ++ib)
+            {
+                const T* psi_band = tmpsi_in + ib * this->max_npw;
+                T* weighted_band = weighted_psi.data() + ib * this->max_npw;
+                for (int ig = 0; ig < this->npw; ++ig)
+                {
+                    const Real weight = static_cast<Real>(this->wfcpw->get_gamma_weight(this->ik, ig));
+                    weighted_band[ig] = weight * psi_band[ig];
+                }
+            }
+            psi_for_becp = weighted_psi.data();
+        }
         char transa = 'C';
         char transb = 'N';
         if (nbands == 1)
@@ -252,7 +272,7 @@ void Nonlocal<OperatorPW<T, Device>>::act(
                 &this->one,
                 this->vkb,
                 this->ppcell->vkbnc,
-                tmpsi_in,
+                psi_for_becp,
                 inc,
                 &this->zero,
                 this->becp,
@@ -277,7 +297,7 @@ void Nonlocal<OperatorPW<T, Device>>::act(
                 &this->one,
                 this->vkb,
                 this->ppcell->vkbnc,
-                tmpsi_in,
+                psi_for_becp,
                 max_npw,
                 &this->zero,
                 this->becp,
@@ -286,6 +306,17 @@ void Nonlocal<OperatorPW<T, Device>>::act(
         }
 
         Parallel_Reduce::reduce_pool(becp, nkb * nbands);
+        if (gamma_compact_wfc)
+        {
+            for (int ib = 0; ib < nbands; ++ib)
+            {
+                for (int ikb = 0; ikb < nkb; ++ikb)
+                {
+                    T& value = becp[ib * nkb + ikb];
+                    value = T(std::real(value));
+                }
+            }
+        }
 
         this->add_nonlocal_pp(tmhpsi, becp, nbands);
     }

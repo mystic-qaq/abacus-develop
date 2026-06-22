@@ -54,6 +54,54 @@ DiagoCG<T, Device>::~DiagoCG()
 }
 
 template <typename T, typename Device>
+void DiagoCG<T, Device>::set_inner_product_weights(const std::vector<Real>& weights)
+{
+    this->inner_product_weights_ = weights;
+}
+
+template <typename T, typename Device>
+typename DiagoCG<T, Device>::Real DiagoCG<T, Device>::inner_product(const int& dim,
+                                                                    const T* psi_L,
+                                                                    const T* psi_R,
+                                                                    const bool reduce) const
+{
+    if (this->inner_product_weights_.empty())
+    {
+        return ModuleBase::dot_real_op<T, Device>()(dim, psi_L, psi_R, reduce);
+    }
+
+    REQUIRES_OK(static_cast<int>(this->inner_product_weights_.size()) >= dim,
+                "DiagoCG::inner_product: weights size must be >= dim");
+
+    Real result = 0.0;
+    for (int i = 0; i < dim; ++i)
+    {
+        result += this->inner_product_weights_[i] * std::real(ModuleBase::get_conj(psi_L[i]) * psi_R[i]);
+    }
+    if (reduce)
+    {
+        Parallel_Reduce::reduce_pool(result);
+    }
+    return result;
+}
+
+template <typename T, typename Device>
+void DiagoCG<T, Device>::apply_inner_product_weights(const ct::Tensor& in, ct::Tensor& out) const
+{
+    if (this->inner_product_weights_.empty())
+    {
+        out.sync(in);
+        return;
+    }
+    REQUIRES_OK(static_cast<int>(this->inner_product_weights_.size()) >= this->n_basis_,
+                "DiagoCG::apply_inner_product_weights: weights size must be >= n_basis");
+    ModuleBase::vector_mul_vector_op<T, Device>()(this->n_basis_,
+                                                  out.data<T>(),
+                                                  in.data<T>(),
+                                                  this->inner_product_weights_.data());
+}
+
+template <typename T, typename Device>
 void DiagoCG<T, Device>::diag_once(const ct::Tensor& prec_in,
                                    ct::Tensor& psi,
                                    ct::Tensor& eigen,
@@ -127,7 +175,7 @@ void DiagoCG<T, Device>::diag_once(const ct::Tensor& prec_in,
         this->spsi_func_(phi_m.data<T>(), sphi.data<T>(), this->n_basis_, 1); // sphi = S|psi(m)>
         this->hpsi_func_(phi_m.data<T>(), hphi.data<T>(), this->n_basis_, 1); // hphi = H|psi(m)>
 
-        eigen_pack[m] = dot_real_op()(this->n_basis_, phi_m.data<T>(), hphi.data<T>());
+        eigen_pack[m] = this->inner_product(this->n_basis_, phi_m.data<T>(), hphi.data<T>());
 
         int iter = 0;
         Real gg_last = 0.0;
@@ -233,9 +281,9 @@ void DiagoCG<T, Device>::calc_grad(const ct::Tensor& prec,
 
     // Update lambda !
     // (4) <psi|SPH|psi >
-    const Real eh = ModuleBase::dot_real_op<T, Device>()(this->n_basis_, sphi.data<T>(), grad.data<T>());
+    const Real eh = this->inner_product(this->n_basis_, sphi.data<T>(), grad.data<T>());
     // (5) <psi|SPS|psi >
-    const Real es = ModuleBase::dot_real_op<T, Device>()(this->n_basis_, sphi.data<T>(), pphi.data<T>());
+    const Real es = this->inner_product(this->n_basis_, sphi.data<T>(), pphi.data<T>());
     const Real lambda = eh / es;
 
     // Update g!
@@ -265,13 +313,16 @@ void DiagoCG<T, Device>::orth_grad(const ct::Tensor& psi,
                                    ct::Tensor& lagrange)
 {
     this->spsi_func_(grad.data<T>(), scg.data<T>(), this->n_basis_, 1); // scg = S|grad>
+    auto weighted_scg
+        = std::move(ct::Tensor(ct::DataTypeToEnum<T>::value, ct::DeviceTypeToEnum<ct_Device>::value, {this->n_basis_}));
+    this->apply_inner_product_weights(scg, weighted_scg);
     ModuleBase::gemv_op<T, Device>()('C',
                                      this->n_basis_,
                                      m,
                                      this->one_,
                                      psi.data<T>(),
                                      this->n_basis_,
-                                     scg.data<T>(),
+                                     weighted_scg.data<T>(),
                                      1,
                                      this->zero_,
                                      lagrange.data<T>(),
@@ -325,8 +376,7 @@ void DiagoCG<T, Device>::calc_gamma_cg(const int& iter,
         // (1) Update gg_inter!
         // gg_inter = <g|g0>
         // Attention : the 'g' in g0 is getted last time
-        gg_inter
-            = ModuleBase::dot_real_op<T, Device>()(this->n_basis_, grad.data<T>(), g0.data<T>()); // b means before
+        gg_inter = this->inner_product(this->n_basis_, grad.data<T>(), g0.data<T>()); // b means before
     }
 
     // (2) Update for g0!
@@ -344,7 +394,7 @@ void DiagoCG<T, Device>::calc_gamma_cg(const int& iter,
 
     // (3) Update gg_now!
     // gg_now = < g|P|scg > = < g|g0 >
-    const Real gg_now = ModuleBase::dot_real_op<T, Device>()(this->n_basis_, grad.data<T>(), g0.data<T>());
+    const Real gg_now = this->inner_product(this->n_basis_, grad.data<T>(), g0.data<T>());
 
     if (iter == 0)
     {
@@ -401,16 +451,16 @@ bool DiagoCG<T, Device>::update_psi(const ct::Tensor& pphi,
                                     ct::Tensor& sphi,
                                     ct::Tensor& hphi)
 {
-    cg_norm = sqrt(ModuleBase::dot_real_op<T, Device>()(this->n_basis_, cg.data<T>(), scg.data<T>()));
+    cg_norm = sqrt(this->inner_product(this->n_basis_, cg.data<T>(), scg.data<T>()));
 
     if (cg_norm < 1.0e-10){
         return true;
     }
 
     const Real a0
-        = ModuleBase::dot_real_op<T, Device>()(this->n_basis_, phi_m.data<T>(), pphi.data<T>()) * 2.0 / cg_norm;
+        = this->inner_product(this->n_basis_, phi_m.data<T>(), pphi.data<T>()) * 2.0 / cg_norm;
     const Real b0
-        = ModuleBase::dot_real_op<T, Device>()(this->n_basis_, cg.data<T>(), pphi.data<T>()) / (cg_norm * cg_norm);
+        = this->inner_product(this->n_basis_, cg.data<T>(), pphi.data<T>()) / (cg_norm * cg_norm);
 
     const Real e0 = eigen;
     theta = atan(a0 / (e0 - b0)) / 2.0;
@@ -487,6 +537,9 @@ void DiagoCG<T, Device>::schmit_orth(const int& m, const ct::Tensor& psi, const 
     REQUIRES_OK(this->n_band_ >= m, "DiagoCG_New::schmit_orth: n_band < m");
 
     ct::Tensor lagrange_so = ct::Tensor(ct::DataTypeToEnum<T>::value, ct::DeviceTypeToEnum<ct_Device>::value, {m + 1});
+    auto weighted_sphi
+        = std::move(ct::Tensor(ct::DataTypeToEnum<T>::value, ct::DeviceTypeToEnum<ct_Device>::value, {this->n_basis_}));
+    this->apply_inner_product_weights(sphi, weighted_sphi);
 
     //<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
     // haozhihan replace 2022-10-6
@@ -497,7 +550,7 @@ void DiagoCG<T, Device>::schmit_orth(const int& m, const ct::Tensor& psi, const 
                                      this->one_,
                                      psi.data<T>(),
                                      this->n_basis_,
-                                     sphi.data<T>(),
+                                     weighted_sphi.data<T>(),
                                      inc,
                                      this->zero_,
                                      lagrange_so.data<T>(),

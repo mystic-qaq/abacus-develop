@@ -299,6 +299,19 @@ void HSolverPW<T, Device>::hamiltSolvePsiK(hamilt::Hamilt<T, Device>* hm,
                               this->diag_thr,
                               this->diag_iter_max,
                               this->nproc_in_pool);
+        if (this->wfc_basis != nullptr && this->wfc_basis->gamma_only
+            && this->wfc_basis->gamma_compact.is_initialized())
+        {
+            const int ik = psi.get_current_k();
+            const int dim = psi.get_current_ngk();
+            std::vector<Real> inner_product_weights(dim, Real(1.0));
+            for (int igl = 0; igl < dim; ++igl)
+            {
+                inner_product_weights[igl]
+                    = static_cast<Real>(this->wfc_basis->get_gamma_weight(ik, igl));
+            }
+            cg.set_inner_product_weights(inner_product_weights);
+        }
 
         DiagoIterAssist<T, Device>::avg_iter += static_cast<double>(
             cg.diag(hpsi_func,

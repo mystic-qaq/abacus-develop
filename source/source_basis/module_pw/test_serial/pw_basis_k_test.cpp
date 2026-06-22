@@ -4,6 +4,8 @@
 #include "source_base/matrix3.h"
 #include <chrono>
 #include <cstdlib>
+#include <map>
+#include <sstream>
 #include <vector>
 
 /************************************************
@@ -34,6 +36,10 @@
 #undef private
 #undef protected
 
+#include <algorithm>
+#include <cmath>
+#include <complex>
+
 class PWBasisKTEST: public testing::Test
 {
 public:
@@ -42,6 +48,52 @@ public:
 	std::string device_flag = "cpu";
 	ModulePW::PW_Basis_K basis_k;
 };
+
+namespace
+{
+std::string gkey(const ModuleBase::Vector3<double>& g)
+{
+	std::ostringstream os;
+	os << static_cast<int>(g.x) << "," << static_cast<int>(g.y) << "," << static_cast<int>(g.z);
+	return os.str();
+}
+
+ModuleBase::Vector3<double> negate_g(const ModuleBase::Vector3<double>& g)
+{
+	return ModuleBase::Vector3<double>(-g.x, -g.y, -g.z);
+}
+
+void setup_gamma_compare_basis(ModulePW::PW_Basis_K& basis, const bool gamma_only)
+{
+	const double lat0 = 2.0;
+	const ModuleBase::Matrix3 latvec(1.0, 0.0, 0.0,
+	                                 0.0, 1.0, 0.0,
+	                                 0.0, 0.0, 1.0);
+	const int nx = 18;
+	const int ny = 18;
+	const int nz = 18;
+	const double gk_ecut = 18.0;
+	const int nks = 1;
+	const ModuleBase::Vector3<double> kvec_d[1] = {{0.0, 0.0, 0.0}};
+	const int distribution_type = 1;
+	const bool xprime = true;
+
+	basis.initgrids(lat0, latvec, nx, ny, nz);
+	basis.initparameters(gamma_only, gk_ecut, nks, kvec_d, distribution_type, xprime);
+	basis.setuptransform();
+	basis.collect_local_pw();
+}
+
+std::map<std::string, int> make_g_to_index(const ModulePW::PW_Basis_K& basis)
+{
+	std::map<std::string, int> index;
+	for (int ig = 0; ig < basis.npwk[0]; ++ig)
+	{
+		index[gkey(basis.getgdirect(0, ig))] = ig;
+	}
+	return index;
+}
+}
 
 TEST_F(PWBasisKTEST,Constructor)
 {
@@ -233,6 +285,108 @@ TEST_F(PWBasisKTEST, ComplexTransformRoundTrip)
 		EXPECT_NEAR(recip_in[ig].real(), recip_out[ig].real(), 1e-10);
 		EXPECT_NEAR(recip_in[ig].imag(), recip_out[ig].imag(), 1e-10);
 	}
+}
+
+TEST_F(PWBasisKTEST, GammaRealForwardMatchesFullComplex)
+{
+	ModulePW::PW_Basis_K full_basis(device_flag, precision_double);
+	ModulePW::PW_Basis_K gamma_basis(device_flag, precision_double);
+	setup_gamma_compare_basis(full_basis, false);
+	setup_gamma_compare_basis(gamma_basis, true);
+
+	ASSERT_FALSE(full_basis.gamma_only);
+	ASSERT_TRUE(gamma_basis.gamma_only);
+	ASSERT_EQ(full_basis.nrxx, gamma_basis.nrxx);
+	ASSERT_GT(gamma_basis.npwk[0], 0);
+
+	std::vector<double> real_in(full_basis.nrxx);
+	std::vector<std::complex<double>> complex_real_in(full_basis.nrxx);
+	for (int ir = 0; ir < full_basis.nrxx; ++ir)
+	{
+		real_in[ir] = std::sin(0.17 * ir) + 0.25 * std::cos(0.31 * ir);
+		complex_real_in[ir] = {real_in[ir], 0.0};
+	}
+
+	std::vector<std::complex<double>> full_out(full_basis.npwk[0]);
+	std::vector<std::complex<double>> gamma_out(gamma_basis.npwk[0]);
+	full_basis.real2recip(complex_real_in.data(), full_out.data(), 0);
+	gamma_basis.real2recip(real_in.data(), gamma_out.data(), 0);
+
+	const auto full_index = make_g_to_index(full_basis);
+	for (int ig = 0; ig < gamma_basis.npwk[0]; ++ig)
+	{
+		const auto found = full_index.find(gkey(gamma_basis.getgdirect(0, ig)));
+		ASSERT_NE(found, full_index.end()) << gkey(gamma_basis.getgdirect(0, ig));
+		EXPECT_NEAR(full_out[found->second].real(), gamma_out[ig].real(), 1e-10);
+		EXPECT_NEAR(full_out[found->second].imag(), gamma_out[ig].imag(), 1e-10);
+	}
+}
+
+TEST_F(PWBasisKTEST, GammaProjectedInverseMatchesFullComplex)
+{
+	ModulePW::PW_Basis_K full_basis(device_flag, precision_double);
+	ModulePW::PW_Basis_K gamma_basis(device_flag, precision_double);
+	setup_gamma_compare_basis(full_basis, false);
+	setup_gamma_compare_basis(gamma_basis, true);
+
+	std::vector<double> real_in(full_basis.nrxx);
+	std::vector<std::complex<double>> complex_real_in(full_basis.nrxx);
+	for (int ir = 0; ir < full_basis.nrxx; ++ir)
+	{
+		real_in[ir] = std::sin(0.17 * ir) + 0.25 * std::cos(0.31 * ir);
+		complex_real_in[ir] = {real_in[ir], 0.0};
+	}
+
+	std::vector<std::complex<double>> full_in(full_basis.npwk[0]);
+	std::vector<std::complex<double>> gamma_in(gamma_basis.npwk[0]);
+	std::vector<std::complex<double>> full_real(full_basis.nrxx);
+	std::vector<std::complex<double>> gamma_real(gamma_basis.nrxx);
+	full_basis.real2recip(complex_real_in.data(), full_in.data(), 0);
+	gamma_basis.real2recip(real_in.data(), gamma_in.data(), 0);
+	full_basis.recip2real(full_in.data(), full_real.data(), 0);
+	gamma_basis.recip2real(gamma_in.data(), gamma_real.data(), 0);
+
+	double max_real_error = 0.0;
+	double max_full_imag = 0.0;
+	double max_gamma_imag = 0.0;
+	for (int ir = 0; ir < full_basis.nrxx; ++ir)
+	{
+		max_real_error = std::max(max_real_error, std::abs(full_real[ir].real() - gamma_real[ir].real()));
+		max_full_imag = std::max(max_full_imag, std::abs(full_real[ir].imag()));
+		max_gamma_imag = std::max(max_gamma_imag, std::abs(gamma_real[ir].imag()));
+	}
+	EXPECT_LT(max_real_error, 1e-10);
+	EXPECT_LT(max_full_imag, 1e-10);
+	EXPECT_LT(max_gamma_imag, 1e-10);
+}
+
+TEST_F(PWBasisKTEST, GammaComplexRealSpaceInputIsNotFullComplexEquivalent)
+{
+	ModulePW::PW_Basis_K full_basis(device_flag, precision_double);
+	ModulePW::PW_Basis_K gamma_basis(device_flag, precision_double);
+	setup_gamma_compare_basis(full_basis, false);
+	setup_gamma_compare_basis(gamma_basis, true);
+
+	std::vector<std::complex<double>> complex_in(full_basis.nrxx);
+	for (int ir = 0; ir < full_basis.nrxx; ++ir)
+	{
+		complex_in[ir] = {std::sin(0.11 * ir), std::cos(0.07 * ir)};
+	}
+
+	std::vector<std::complex<double>> full_out(full_basis.npwk[0]);
+	std::vector<std::complex<double>> gamma_out(gamma_basis.npwk[0]);
+	full_basis.real2recip(complex_in.data(), full_out.data(), 0);
+	gamma_basis.real2recip(complex_in.data(), gamma_out.data(), 0);
+
+	const auto full_index = make_g_to_index(full_basis);
+	double max_error = 0.0;
+	for (int ig = 0; ig < gamma_basis.npwk[0]; ++ig)
+	{
+		const auto found = full_index.find(gkey(gamma_basis.getgdirect(0, ig)));
+		ASSERT_NE(found, full_index.end()) << gkey(gamma_basis.getgdirect(0, ig));
+		max_error = std::max(max_error, std::abs(full_out[found->second] - gamma_out[ig]));
+	}
+	EXPECT_GT(max_error, 1e-4);
 }
 
 TEST_F(PWBasisKTEST, CopyComplexBufferTimerBenchmark)
