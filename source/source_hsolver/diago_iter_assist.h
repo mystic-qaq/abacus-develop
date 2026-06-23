@@ -7,6 +7,7 @@
 #include "source_psi/psi.h"
 
 #include <functional>
+#include <vector>
 
 namespace hsolver
 {
@@ -52,7 +53,8 @@ class DiagoIterAssist
                               psi::Psi<T, Device>& evc,
                               Real *en,
                               int n_band = 0,
-                              const bool is_S_orthogonal = false);
+                              const bool is_S_orthogonal = false,
+                              const std::vector<Real>& inner_product_weights = {});
 
     /// @brief use LAPACK to diagonalize the Hamiltonian matrix
     /// @param pHamilt interface to hamiltonian

@@ -2,7 +2,6 @@
 #include "source_base/global_function.h"
 #include "source_base/constants.h"
 #include "source_base/matrix3.h"
-#include "source_base/timer.h"
 #include <chrono>
 #include <cstdlib>
 #include <map>
@@ -203,6 +202,61 @@ TEST_F(PWBasisKTEST, Initparameters)
 	EXPECT_EQ(basis_k.distribution_type, distribution_type_in);
 }
 
+TEST_F(PWBasisKTEST, AllGammaMultiKUsesHalfSpectrum)
+{
+	ModulePW::PW_Basis_K basis_k(device_flag, precision_double);
+	const double lat0 = 1.8897261254578281;
+	const ModuleBase::Matrix3 latvec(10.0, 0.0, 0.0,
+	                                 0.0, 10.0, 0.0,
+	                                 0.0, 0.0, 10.0);
+	basis_k.initgrids(lat0, latvec, 20, 20, 20);
+
+	const ModuleBase::Vector3<double> kvec_d_in[3] = {{0.0, 0.0, 0.0},
+	                                                  {0.0, 0.0, 0.0},
+	                                                  {0.0, 0.0, 0.0}};
+	basis_k.initparameters(true, 2.0, 3, kvec_d_in, 1, true);
+
+	EXPECT_TRUE(basis_k.gamma_only);
+	for (int ik = 0; ik < basis_k.nks; ++ik)
+	{
+		EXPECT_TRUE(basis_k.is_gamma_k[ik]);
+	}
+	EXPECT_EQ(basis_k.fftnx, basis_k.nx / 2 + 1);
+	EXPECT_EQ(basis_k.fftny, basis_k.ny);
+
+	ASSERT_NO_THROW(basis_k.setuptransform());
+	ASSERT_NE(basis_k.npwk, nullptr);
+	EXPECT_TRUE(basis_k.gamma_compact.is_initialized());
+	EXPECT_LT(basis_k.npw, basis_k.nx * basis_k.ny * basis_k.nz);
+	for (int ik = 1; ik < basis_k.nks; ++ik)
+	{
+		EXPECT_EQ(basis_k.npwk[0], basis_k.npwk[ik]);
+	}
+}
+
+TEST_F(PWBasisKTEST, MixedGammaAndNonGammaFallsBackToFullComplex)
+{
+	ModulePW::PW_Basis_K basis_k(device_flag, precision_double);
+	const double lat0 = 1.8897261254578281;
+	const ModuleBase::Matrix3 latvec(10.0, 0.0, 0.0,
+	                                 0.0, 10.0, 0.0,
+	                                 0.0, 0.0, 10.0);
+	basis_k.initgrids(lat0, latvec, 20, 20, 20);
+
+	const ModuleBase::Vector3<double> kvec_d_in[2] = {{0.0, 0.0, 0.0},
+	                                                  {0.25, 0.0, 0.0}};
+	basis_k.initparameters(true, 2.0, 2, kvec_d_in, 1, true);
+
+	EXPECT_FALSE(basis_k.gamma_only);
+	EXPECT_TRUE(basis_k.is_gamma_k[0]);
+	EXPECT_FALSE(basis_k.is_gamma_k[1]);
+	EXPECT_EQ(basis_k.fftnx, basis_k.nx);
+	EXPECT_EQ(basis_k.fftny, basis_k.ny);
+
+	ASSERT_NO_THROW(basis_k.setuptransform());
+	EXPECT_FALSE(basis_k.gamma_compact.is_initialized());
+}
+
 TEST_F(PWBasisKTEST, SetupTransform) 
 {
 	ModulePW::PW_Basis_K basis_k(device_flag, precision_double);
@@ -240,61 +294,9 @@ TEST_F(PWBasisKTEST, CollectLocalPW)
 	const bool xprime_in = true;	
 	basis_k.initparameters(gamma_only_in, gk_ecut_in, nks_in,kvec_d_in, distribution_type_in, xprime_in);	
 	EXPECT_NO_THROW(basis_k.setuptransform());
-	basis_k.reset_k_cache_stats();
 	EXPECT_NO_THROW(basis_k.collect_local_pw());
-	ASSERT_GT(basis_k.npwk[0], 0);
-	auto* gk2_ptr = basis_k.get_gk2_data<double>();
-	auto* gcar_ptr = basis_k.get_gcar_data<double>();
-	const double gk2_sample = basis_k.getgk2(0,0);
-	const auto stats_after_build = basis_k.get_k_cache_stats();
-	EXPECT_EQ(stats_after_build.gcar_misses, 1);
-	EXPECT_EQ(stats_after_build.gk2_misses, 1);
-	EXPECT_NO_THROW(basis_k.collect_local_pw());
-	EXPECT_EQ(basis_k.get_gk2_data<double>(), gk2_ptr);
-	EXPECT_EQ(basis_k.get_gcar_data<double>(), gcar_ptr);
-	EXPECT_DOUBLE_EQ(basis_k.getgk2(0,0), gk2_sample);
-	EXPECT_NO_THROW(basis_k.collect_local_pw(1.0, 0.5, 0.2));
-	EXPECT_EQ(basis_k.get_gcar_data<double>(), gcar_ptr);
-	const auto stats_after_hits = basis_k.get_k_cache_stats();
-	EXPECT_EQ(stats_after_hits.gcar_hits, 2);
-	EXPECT_EQ(stats_after_hits.gcar_misses, 1);
-	EXPECT_EQ(stats_after_hits.gk2_hits, 1);
-	EXPECT_EQ(stats_after_hits.gk2_misses, 2);
-	EXPECT_GT(stats_after_hits.cache_bytes, 0);
-	basis_k.initparameters(gamma_only_in, gk_ecut_in, nks_in, kvec_d_in, distribution_type_in, xprime_in);
-	EXPECT_EQ(basis_k.gcar, nullptr);
-	EXPECT_EQ(basis_k.gk2, nullptr);
-	EXPECT_EQ(basis_k.k_gcar_cache_storage, nullptr);
-	EXPECT_EQ(basis_k.k_gk2_cache_storage, nullptr);
-	EXPECT_EQ(basis_k.get_gcar_data<double>(), nullptr);
-	EXPECT_EQ(basis_k.get_gk2_data<double>(), nullptr);
-	EXPECT_EQ(basis_k.get_k_cache_stats().cache_bytes, 0);
 	EXPECT_EQ(basis_k.npw,3695);
 	EXPECT_EQ(basis_k.npwk_max,2721);
-}
-
-TEST_F(PWBasisKTEST, CollectLocalPWRecordsTimers)
-{
-	ModuleBase::timer::timer_pool.clear();
-	ModulePW::PW_Basis_K basis_k(device_flag, precision_double);
-	double lat0 = 1.8897261254578281;
-	ModuleBase::Matrix3 latvec(10.0,0.0,0.0,
-				0.0,10.0,0.0,
-				0.0,0.0,10.0);
-	double gridecut = 10.0;
-	basis_k.initgrids(lat0, latvec, gridecut);
-	const bool gamma_only_in = true;
-	const double gk_ecut_in = 11.0;
-	const int nks_in = 3;
-	const ModuleBase::Vector3<double> kvec_d_in[3] = { {0.0, 0.0, 0.0}, {0.1, 0.2, 0.3}, {0.4, 0.5, 0.6} };
-	const int distribution_type_in = 1;
-	const bool xprime_in = true;
-	basis_k.initparameters(gamma_only_in, gk_ecut_in, nks_in, kvec_d_in, distribution_type_in, xprime_in);
-	basis_k.setuptransform();
-	basis_k.collect_local_pw();
-	const auto& timer_pool = ModuleBase::timer::timer_pool[basis_k.classname];
-	EXPECT_TRUE(timer_pool.count("collect_local_pw"));
-	EXPECT_GE(timer_pool.at("collect_local_pw").calls, 1u);
 }
 
 TEST_F(PWBasisKTEST, ComplexTransformRoundTrip)
@@ -413,33 +415,22 @@ TEST_F(PWBasisKTEST, GammaProjectedInverseMatchesFullComplex)
 	EXPECT_LT(max_gamma_imag, 1e-10);
 }
 
-TEST_F(PWBasisKTEST, GammaComplexRealSpaceInputIsNotFullComplexEquivalent)
+TEST_F(PWBasisKTEST, GammaComplexRealSpaceInputRejectsNonRealData)
 {
-	ModulePW::PW_Basis_K full_basis(device_flag, precision_double);
+	::testing::FLAGS_gtest_death_test_style = "threadsafe";
 	ModulePW::PW_Basis_K gamma_basis(device_flag, precision_double);
-	setup_gamma_compare_basis(full_basis, false);
 	setup_gamma_compare_basis(gamma_basis, true);
 
-	std::vector<std::complex<double>> complex_in(full_basis.nrxx);
-	for (int ir = 0; ir < full_basis.nrxx; ++ir)
+	std::vector<std::complex<double>> complex_in(gamma_basis.nrxx);
+	for (int ir = 0; ir < gamma_basis.nrxx; ++ir)
 	{
 		complex_in[ir] = {std::sin(0.11 * ir), std::cos(0.07 * ir)};
 	}
-
-	std::vector<std::complex<double>> full_out(full_basis.npwk[0]);
 	std::vector<std::complex<double>> gamma_out(gamma_basis.npwk[0]);
-	full_basis.real2recip(complex_in.data(), full_out.data(), 0);
-	gamma_basis.real2recip(complex_in.data(), gamma_out.data(), 0);
 
-	const auto full_index = make_g_to_index(full_basis);
-	double max_error = 0.0;
-	for (int ig = 0; ig < gamma_basis.npwk[0]; ++ig)
-	{
-		const auto found = full_index.find(gkey(gamma_basis.getgdirect(0, ig)));
-		ASSERT_NE(found, full_index.end()) << gkey(gamma_basis.getgdirect(0, ig));
-		max_error = std::max(max_error, std::abs(full_out[found->second] - gamma_out[ig]));
-	}
-	EXPECT_GT(max_error, 1e-4);
+	EXPECT_EXIT(gamma_basis.real2recip(complex_in.data(), gamma_out.data(), 0),
+	            ::testing::ExitedWithCode(1),
+	            "");
 }
 
 TEST_F(PWBasisKTEST, CopyComplexBufferTimerBenchmark)

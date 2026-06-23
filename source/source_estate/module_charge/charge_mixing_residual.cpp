@@ -4,6 +4,22 @@
 #include "source_base/parallel_reduce.h"
 #include "source_hamilt/module_xc/xc_functional.h"
 
+namespace
+{
+double gamma_conjugate_weight(const ModulePW::PW_Basis* rhopw, const int ig)
+{
+    if (rhopw == nullptr || !rhopw->gamma_only)
+    {
+        return 1.0;
+    }
+    if (rhopw->gamma_compact.is_initialized())
+    {
+        return rhopw->gamma_compact.conjugate_weight(ig);
+    }
+    return (ig == rhopw->ig_gge0) ? 1.0 : 2.0;
+}
+} // namespace
+
 double Charge_Mixing::get_drho(Charge* chr, const double nelec)
 {
     ModuleBase::TITLE("Charge_Mixing", "get_drho");
@@ -137,7 +153,8 @@ double Charge_Mixing::inner_product_recip_rho(std::complex<double>* rho1, std::c
         for (int ig = 0; ig < this->rhopw->npw; ++ig)
         {
 			if (ig == ig0) {continue;}
-			sum += (conj(rhog1[0][ig]) * rhog2[0][ig]).real() / this->rhopw->gg[ig];
+            const double weight = gamma_conjugate_weight(this->rhopw, ig);
+			sum += weight * (conj(rhog1[0][ig]) * rhog2[0][ig]).real() / this->rhopw->gg[ig];
         }
         sum *= fac;
         return sum;
@@ -158,14 +175,10 @@ double Charge_Mixing::inner_product_recip_rho(std::complex<double>* rho1, std::c
         for (int ig = 0; ig < this->rhopw->npw; ++ig)
         {
             if (ig == ig0) {continue;}
-            sum += (conj(rhog1[0][ig] + rhog1[1][ig]) * (rhog2[0][ig] + rhog2[1][ig])).real() / this->rhopw->gg[ig];
+            const double weight = gamma_conjugate_weight(this->rhopw, ig);
+            sum += weight * (conj(rhog1[0][ig] + rhog1[1][ig]) * (rhog2[0][ig] + rhog2[1][ig])).real() / this->rhopw->gg[ig];
         }
         sum *= fac;
-
-        if (PARAM.globalv.gamma_only_pw)
-        {
-            sum *= 2.0;
-        }
 
         // (2) Second part of density error.
         // including |G|=0 term.
@@ -179,15 +192,10 @@ double Charge_Mixing::inner_product_recip_rho(std::complex<double>* rho1, std::c
 #endif
         for (int ig = 0; ig < this->rhopw->npw; ig++)
         {
-            mag += (conj(rhog1[0][ig] - rhog1[1][ig]) * (rhog2[0][ig] - rhog2[1][ig])).real();
+            const double weight = gamma_conjugate_weight(this->rhopw, ig);
+            mag += weight * (conj(rhog1[0][ig] - rhog1[1][ig]) * (rhog2[0][ig] - rhog2[1][ig])).real();
         }
         mag *= fac2;
-
-        // if(PARAM.globalv.gamma_only_pw);
-        if (PARAM.globalv.gamma_only_pw) // Peize Lin delete ; 2020.01.31
-        {
-            mag *= 2.0;
-        }
 
         // std::cout << " sum=" << sum << " mag=" << mag << std::endl;
         sum2 += mag;
@@ -211,7 +219,8 @@ double Charge_Mixing::inner_product_recip_rho(std::complex<double>* rho1, std::c
 				{
 					continue;
 				}
-                sum += (conj(rhog1[0][ig]) * rhog2[0][ig]).real() / this->rhopw->gg[ig];
+                const double weight = gamma_conjugate_weight(this->rhopw, ig);
+                sum += weight * (conj(rhog1[0][ig]) * rhog2[0][ig]).real() / this->rhopw->gg[ig];
             }
             sum *= fac;
             if (ig0 > 0)
@@ -219,11 +228,6 @@ double Charge_Mixing::inner_product_recip_rho(std::complex<double>* rho1, std::c
                 sum += fac2
                        * ((conj(rhog1[1][ig0]) * rhog2[1][ig0]).real() + (conj(rhog1[2][ig0]) * rhog2[2][ig0]).real()
                           + (conj(rhog1[3][ig0]) * rhog2[3][ig0]).real());
-            }
-            double fac3 = fac2;
-            if (PARAM.globalv.gamma_only_pw)
-            {
-                fac3 *= 2.0;
             }
 #ifdef _OPENMP
 #pragma omp parallel for reduction(+ : sum)
@@ -233,7 +237,8 @@ double Charge_Mixing::inner_product_recip_rho(std::complex<double>* rho1, std::c
                 if (ig == ig0) {
                     continue;
 }
-                sum += fac3
+                const double weight = gamma_conjugate_weight(this->rhopw, ig);
+                sum += weight * fac2
                        * ((conj(rhog1[1][ig]) * rhog2[1][ig]).real() + (conj(rhog1[2][ig]) * rhog2[2][ig]).real()
                           + (conj(rhog1[3][ig]) * rhog2[3][ig]).real());
             }
@@ -306,7 +311,8 @@ double Charge_Mixing::inner_product_recip_hartree(std::complex<double>* rhog1, s
             {
                 continue;
             }
-            sum += (conj(rhog1[ig]) * rhog2[ig]).real() / this->rhopw->gg[ig];
+            const double weight = gamma_conjugate_weight(this->rhopw, ig);
+            sum += weight * (conj(rhog1[ig]) * rhog2[ig]).real() / this->rhopw->gg[ig];
         }
         sum *= fac;
         return sum;
@@ -329,14 +335,10 @@ double Charge_Mixing::inner_product_recip_hartree(std::complex<double>* rhog1, s
             {
                 continue;
             }
-            sum += (conj(rhog1[ig]) * (rhog2[ig])).real() / this->rhopw->gg[ig];
+            const double weight = gamma_conjugate_weight(this->rhopw, ig);
+            sum += weight * (conj(rhog1[ig]) * (rhog2[ig])).real() / this->rhopw->gg[ig];
         }
         sum *= fac;
-
-        if (PARAM.globalv.gamma_only_pw)
-        {
-            sum *= 2.0;
-        }
 
         // (2) Second part of density error.
         // including |G|=0 term.
@@ -350,14 +352,10 @@ double Charge_Mixing::inner_product_recip_hartree(std::complex<double>* rhog1, s
 #endif
         for (int ig = 0; ig < this->rhopw->npw; ig++)
         {
-            mag += (conj(rhog1[ig + this->rhopw->npw]) * rhog2[ig + this->rhopw->npw]).real();
+            const double weight = gamma_conjugate_weight(this->rhopw, ig);
+            mag += weight * (conj(rhog1[ig + this->rhopw->npw]) * rhog2[ig + this->rhopw->npw]).real();
         }
         mag *= fac2;
-
-        if (PARAM.globalv.gamma_only_pw)
-        {
-            mag *= 2.0;
-        }
 
         sum2 += mag;
         sum += sum2;
@@ -378,7 +376,8 @@ double Charge_Mixing::inner_product_recip_hartree(std::complex<double>* rhog1, s
             for (int ig = 0; ig < this->rhopw->npw; ig++)
             {
                 if (ig == ig0) {continue;}
-                sum += (conj(rhog1[ig]) * rhog2[ig]).real() / this->rhopw->gg[ig];
+                const double weight = gamma_conjugate_weight(this->rhopw, ig);
+                sum += weight * (conj(rhog1[ig]) * rhog2[ig]).real() / this->rhopw->gg[ig];
             }
             sum *= fac;
             if (ig0 > 0)
@@ -386,11 +385,6 @@ double Charge_Mixing::inner_product_recip_hartree(std::complex<double>* rhog1, s
                 sum += fac2
                        * ((conj(rhog1[ig0 + npw]) * rhog2[ig0 + npw]).real() + (conj(rhog1[ig0 + 2*npw]) * rhog2[ig0 + 2*npw]).real()
                           + (conj(rhog1[ig0 + 3*npw]) * rhog2[ig0 + 3*npw]).real());
-            }
-            double fac3 = fac2;
-            if (PARAM.globalv.gamma_only_pw)
-            {
-                fac3 *= 2.0;
             }
 #ifdef _OPENMP
 #pragma omp parallel for reduction(+ : sum)
@@ -400,7 +394,8 @@ double Charge_Mixing::inner_product_recip_hartree(std::complex<double>* rhog1, s
                 if (ig == ig0) {
                     continue;
 }
-                sum += fac3
+                const double weight = gamma_conjugate_weight(this->rhopw, ig);
+                sum += weight * fac2
                        * ((conj(rhog1[ig + npw]) * rhog2[ig + npw]).real() + (conj(rhog1[ig + 2*npw]) * rhog2[ig + 2*npw]).real()
                           + (conj(rhog1[ig + 3*npw]) * rhog2[ig + 3*npw]).real());
             }
@@ -418,18 +413,14 @@ double Charge_Mixing::inner_product_recip_hartree(std::complex<double>* rhog1, s
                 {
                     continue;
                 }
-                sum += (conj(rhog1[ig]) * rhog2[ig]).real() / this->rhopw->gg[ig];
+                const double weight = gamma_conjugate_weight(this->rhopw, ig);
+                sum += weight * (conj(rhog1[ig]) * rhog2[ig]).real() / this->rhopw->gg[ig];
             }
             sum *= fac;
             if (ig0 > 0)
             {
                 sum += fac2
                        * ((conj(rhog1[ig0 + this->rhopw->npw]) * rhog2[ig0 + this->rhopw->npw]).real());
-            }
-            double fac3 = fac2;
-            if (PARAM.globalv.gamma_only_pw)
-            {
-                fac3 *= 2.0;
             }
 #ifdef _OPENMP
 #pragma omp parallel for reduction(+ : sum)
@@ -439,7 +430,8 @@ double Charge_Mixing::inner_product_recip_hartree(std::complex<double>* rhog1, s
                 if (ig == ig0) {
                     continue;
 }
-                sum += fac3
+                const double weight = gamma_conjugate_weight(this->rhopw, ig);
+                sum += weight * fac2
                        * ((conj(rhog1[ig + this->rhopw->npw]) * rhog2[ig + this->rhopw->npw]).real());
             }
         }

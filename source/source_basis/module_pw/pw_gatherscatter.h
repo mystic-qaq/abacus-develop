@@ -3,6 +3,7 @@
 #include "source_base/global_function.h"
 #include "source_base/timer.h"
 #include <algorithm>
+#include <string>
 #include <type_traits>
 #include <vector>
 
@@ -87,18 +88,25 @@ inline MPI_Datatype mpi_complex_dtype<float>()
     return MPI_COMPLEX;
 }
 
-inline bool prefer_overlap_pipeline(const int npwtot, const int poolnproc)
+inline void check_mpi(const int ierr, const char* where)
 {
-    const long long comm_pressure = static_cast<long long>(std::max(1, npwtot))
-                                    * static_cast<long long>(std::max(1, poolnproc));
-    return poolnproc <= 8 && comm_pressure <= 1000;
+    if (ierr == MPI_SUCCESS)
+    {
+        return;
+    }
+
+    char error_string[MPI_MAX_ERROR_STRING] = {0};
+    int error_length = 0;
+    MPI_Error_string(ierr, error_string, &error_length);
+    ModuleBase::WARNING_QUIT(where,
+                             std::string("MPI communication failed: ")
+                                 + std::string(error_string, error_length));
 }
 
-inline bool prefer_nonblocking_pt2pt(const int npwtot, const int poolnproc)
+inline bool prefer_overlap_pipeline(const int npwtot, const int poolnproc)
 {
-    const long long comm_pressure = static_cast<long long>(std::max(1, npwtot))
-                                    * static_cast<long long>(std::max(1, poolnproc));
-    return poolnproc <= 8 && comm_pressure <= 20000;
+    (void)npwtot;
+    return poolnproc > 1;
 }
 #endif // __MPI
 } // namespace detail
@@ -156,138 +164,6 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
 
     if (!detail::prefer_overlap_pipeline(this->npwtot, poolnproc_gps))
     {
-        if (detail::prefer_nonblocking_pt2pt(this->npwtot, poolnproc_gps))
-        {
-            const int send_count_gps = startr_gps[poolnproc_gps - 1] + numr_gps[poolnproc_gps - 1];
-            const int recv_count_gps = startg_gps[poolnproc_gps - 1] + numg_gps[poolnproc_gps - 1];
-            std::complex<T>* commbuf = this->acquire_comm_workbuf<T>(send_count_gps + recv_count_gps);
-            std::complex<T>* sendbuf = commbuf;
-            std::complex<T>* recvbuf = commbuf + send_count_gps;
-
-            const int self_istot_beg = (nplane_gps > 0) ? (startr_gps[poolrank_gps] / nplane_gps) : 0;
-            const int self_istot_end = self_istot_beg + nst_gps;
-
-            ModuleBase::timer::start(this->classname, "gatherp_pack");
-            if (nplane_gps > 0)
-            {
-#ifdef _OPENMP
-#pragma omp parallel for schedule(static)
-#endif
-                for (int istot = 0; istot < nstot_gps; ++istot)
-                {
-                    if (istot >= self_istot_beg && istot < self_istot_end)
-                    {
-                        continue;
-                    }
-                    int ixy = istot2ixy_gps[istot];
-                    std::complex<T>* outp = &sendbuf[istot * nplane_gps];
-                    std::complex<T>* inp = &in[ixy * nplane_gps];
-                    detail::copy_complex_buffer(inp, outp, nplane_gps);
-                }
-            }
-            ModuleBase::timer::end(this->classname, "gatherp_pack");
-
-            static thread_local std::vector<MPI_Request> recv_requests;
-            static thread_local std::vector<MPI_Request> send_requests;
-            static thread_local std::vector<MPI_Status> recv_status;
-            static thread_local std::vector<int> recv_indices;
-            recv_requests.assign(poolnproc_gps, MPI_REQUEST_NULL);
-            send_requests.assign(poolnproc_gps, MPI_REQUEST_NULL);
-            recv_status.resize(poolnproc_gps);
-            recv_indices.assign(poolnproc_gps, MPI_UNDEFINED);
-            int active_recvs = 0;
-            int active_sends = 0;
-
-            ModuleBase::timer::start(this->classname, "gatherp_alltoallv");
-            for (int ip = 0; ip < poolnproc_gps; ++ip)
-            {
-                if (ip == poolrank_gps || numg_gps[ip] == 0)
-                {
-                    continue;
-                }
-                MPI_Irecv(&recvbuf[startg_gps[ip]], numg_gps[ip], mpi_type, ip, 0,
-                          this->pool_world, &recv_requests[ip]);
-                ++active_recvs;
-            }
-            for (int ip = 0; ip < poolnproc_gps; ++ip)
-            {
-                if (ip == poolrank_gps || numr_gps[ip] == 0)
-                {
-                    continue;
-                }
-                MPI_Isend(&sendbuf[startr_gps[ip]], numr_gps[ip], mpi_type, ip, 0,
-                          this->pool_world, &send_requests[ip]);
-                ++active_sends;
-            }
-            ModuleBase::timer::end(this->classname, "gatherp_alltoallv");
-
-            auto unpack_peer = [&](const int ip)
-            {
-                const int nzip = numz_gps[ip];
-                if (nzip == 0)
-                {
-                    return;
-                }
-#ifdef _OPENMP
-#pragma omp parallel for schedule(static)
-#endif
-                for (int is = 0; is < nst_gps; ++is)
-                {
-                    std::complex<T>* outp = &out[is * nz_gps + startz_gps[ip]];
-                    std::complex<T>* inp = &recvbuf[startg_gps[ip] + is * nzip];
-                    detail::copy_complex_buffer(inp, outp, nzip);
-                }
-            };
-
-            ModuleBase::timer::start(this->classname, "gatherp_unpack");
-            if (nplane_gps > 0)
-            {
-#ifdef _OPENMP
-#pragma omp parallel for schedule(static)
-#endif
-                for (int is = 0; is < nst_gps; ++is)
-                {
-                    const int istot = self_istot_beg + is;
-                    const int ixy = istot2ixy_gps[istot];
-                    std::complex<T>* outp = &out[is * nz_gps + startz_gps[poolrank_gps]];
-                    std::complex<T>* inp = &in[ixy * nplane_gps];
-                    detail::copy_complex_buffer(inp, outp, nplane_gps);
-                }
-            }
-            ModuleBase::timer::end(this->classname, "gatherp_unpack");
-
-            while (active_recvs > 0)
-            {
-                int outcount = 0;
-                ModuleBase::timer::start(this->classname, "gatherp_alltoallv");
-                MPI_Waitsome(poolnproc_gps,
-                             recv_requests.data(),
-                             &outcount,
-                             recv_indices.data(),
-                             recv_status.data());
-                ModuleBase::timer::end(this->classname, "gatherp_alltoallv");
-                if (outcount == MPI_UNDEFINED)
-                {
-                    break;
-                }
-                for (int idx = 0; idx < outcount; ++idx)
-                {
-                    ModuleBase::timer::start(this->classname, "gatherp_unpack");
-                    unpack_peer(recv_indices[idx]);
-                    ModuleBase::timer::end(this->classname, "gatherp_unpack");
-                }
-                active_recvs -= outcount;
-            }
-
-            if (active_sends > 0)
-            {
-                ModuleBase::timer::start(this->classname, "gatherp_alltoallv");
-                MPI_Waitall(poolnproc_gps, send_requests.data(), MPI_STATUSES_IGNORE);
-                ModuleBase::timer::end(this->classname, "gatherp_alltoallv");
-            }
-            return;
-        }
-
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
 #endif
@@ -315,22 +191,61 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
         return;
     }
 
-    const int send_count_gps = startr_gps[poolnproc_gps - 1] + numr_gps[poolnproc_gps - 1];
-    const int recv_count_gps = startg_gps[poolnproc_gps - 1] + numg_gps[poolnproc_gps - 1];
-    const int buf_span_gps = send_count_gps + recv_count_gps;
-    std::complex<T>* commbuf = this->acquire_comm_workbuf<T>(2 * buf_span_gps);
-    std::complex<T>* sendbufs[2] = {commbuf, commbuf + buf_span_gps};
-    std::complex<T>* recvbufs[2] = {sendbufs[0] + send_count_gps, sendbufs[1] + send_count_gps};
-
     const int self_istot_beg = (nplane_gps > 0) ? (startr_gps[poolrank_gps] / nplane_gps) : 0;
-    int block_sticks = detail::overlap_block_sticks(nst_gps, std::max(nplane_gps, nz_gps));
-    MPI_Allreduce(MPI_IN_PLACE, &block_sticks, 1, MPI_INT, MPI_MIN, this->pool_world);
+    const int block_sticks = detail::overlap_block_sticks(nstot_gps, std::max(nplane_gps, nz_gps));
     int nst_max = 0;
     for (int ip = 0; ip < poolnproc_gps; ++ip)
     {
         nst_max = std::max(nst_max, nst_per_gps[ip]);
     }
     const int num_blocks = std::max(1, (nst_max + block_sticks - 1) / block_sticks);
+
+    if (num_blocks == 1)
+    {
+        ModuleBase::timer::start(this->classname, "gatherp_single_block_fallback");
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+        for (int istot = 0; istot < nstot_gps; ++istot)
+        {
+            const int ixy = istot2ixy_gps[istot];
+            std::complex<T>* outp = &out[istot * nplane_gps];
+            const std::complex<T>* inp = &in[ixy * nplane_gps];
+            detail::copy_complex_buffer(inp, outp, nplane_gps);
+        }
+        detail::check_mpi(MPI_Alltoallv(out,
+                                        numr_gps,
+                                        startr_gps,
+                                        mpi_type,
+                                        in,
+                                        numg_gps,
+                                        startg_gps,
+                                        mpi_type,
+                                        this->pool_world),
+                          "PW_Basis::gatherp_scatters");
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) schedule(static)
+#endif
+        for (int ip = 0; ip < poolnproc_gps; ++ip)
+        {
+            for (int is = 0; is < nst_gps; ++is)
+            {
+                const int nzip = numz_gps[ip];
+                std::complex<T>* outp = &out[startz_gps[ip] + is * nz_gps];
+                const std::complex<T>* inp = &in[startg_gps[ip] + is * nzip];
+                detail::copy_complex_buffer(inp, outp, nzip);
+            }
+        }
+        ModuleBase::timer::end(this->classname, "gatherp_single_block_fallback");
+        return;
+    }
+
+    const int send_count_gps = block_sticks * nplane_gps * poolnproc_gps;
+    const int recv_count_gps = block_sticks * nz_gps;
+    const int buf_span_gps = std::max(1, send_count_gps + recv_count_gps);
+    std::vector<std::complex<T>> commbuf(std::max(1, 2 * buf_span_gps));
+    std::complex<T>* sendbufs[2] = {commbuf.data(), commbuf.data() + buf_span_gps};
+    std::complex<T>* recvbufs[2] = {sendbufs[0] + send_count_gps, sendbufs[1] + send_count_gps};
 
     struct BlockState
     {
@@ -342,6 +257,7 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
         std::vector<int> rdispls;
         std::vector<MPI_Request> recv_requests;
         std::vector<MPI_Request> send_requests;
+        MPI_Request alltoall_request = MPI_REQUEST_NULL;
     };
 
     BlockState blocks[2];
@@ -365,6 +281,7 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
         std::fill(blk.rdispls.begin(), blk.rdispls.end(), 0);
         std::fill(blk.recv_requests.begin(), blk.recv_requests.end(), MPI_REQUEST_NULL);
         std::fill(blk.send_requests.begin(), blk.send_requests.end(), MPI_REQUEST_NULL);
+        blk.alltoall_request = MPI_REQUEST_NULL;
 
         int send_disp = 0;
         int recv_disp = 0;
@@ -424,20 +341,34 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
         }
         ModuleBase::timer::end(this->classname, "gatherp_unpack");
 
-        ModuleBase::timer::start(this->classname, "gatherp_alltoallv");
+        ModuleBase::timer::start(this->classname, "gatherp_overlap_comm");
+#if MPI_VERSION >= 3
+        detail::check_mpi(MPI_Ialltoallv(sendbufs[buf_id],
+                                         blk.sendcounts.data(),
+                                         blk.sdispls.data(),
+                                         mpi_type,
+                                         recvbufs[buf_id],
+                                         blk.recvcounts.data(),
+                                         blk.rdispls.data(),
+                                         mpi_type,
+                                         this->pool_world,
+                                         &blk.alltoall_request),
+                          "PW_Basis::gatherp_scatters");
+#else
         for (int ip = 0; ip < poolnproc_gps; ++ip)
         {
             if (ip == poolrank_gps || blk.recvcounts[ip] == 0)
             {
                 continue;
             }
-            MPI_Irecv(recvbufs[buf_id] + blk.rdispls[ip],
-                      blk.recvcounts[ip],
-                      mpi_type,
-                      ip,
-                      0,
-                      this->pool_world,
-                      &blk.recv_requests[ip]);
+            detail::check_mpi(MPI_Irecv(recvbufs[buf_id] + blk.rdispls[ip],
+                                         blk.recvcounts[ip],
+                                         mpi_type,
+                                         ip,
+                                         0,
+                                         this->pool_world,
+                                         &blk.recv_requests[ip]),
+                              "PW_Basis::gatherp_scatters");
         }
         for (int ip = 0; ip < poolnproc_gps; ++ip)
         {
@@ -445,23 +376,32 @@ void PW_Basis::gatherp_scatters(std::complex<T>* in, std::complex<T>* out) const
             {
                 continue;
             }
-            MPI_Isend(sendbufs[buf_id] + blk.sdispls[ip],
-                      blk.sendcounts[ip],
-                      mpi_type,
-                      ip,
-                      0,
-                      this->pool_world,
-                      &blk.send_requests[ip]);
+            detail::check_mpi(MPI_Isend(sendbufs[buf_id] + blk.sdispls[ip],
+                                         blk.sendcounts[ip],
+                                         mpi_type,
+                                         ip,
+                                         0,
+                                         this->pool_world,
+                                         &blk.send_requests[ip]),
+                              "PW_Basis::gatherp_scatters");
         }
-        ModuleBase::timer::end(this->classname, "gatherp_alltoallv");
+#endif
+        ModuleBase::timer::end(this->classname, "gatherp_overlap_comm");
     };
 
     auto finalize_block = [&](BlockState& blk, const int buf_id)
     {
-        ModuleBase::timer::start(this->classname, "gatherp_alltoallv");
-        MPI_Waitall(poolnproc_gps, blk.recv_requests.data(), MPI_STATUSES_IGNORE);
-        MPI_Waitall(poolnproc_gps, blk.send_requests.data(), MPI_STATUSES_IGNORE);
-        ModuleBase::timer::end(this->classname, "gatherp_alltoallv");
+        ModuleBase::timer::start(this->classname, "gatherp_overlap_comm");
+#if MPI_VERSION >= 3
+        detail::check_mpi(MPI_Wait(&blk.alltoall_request, MPI_STATUS_IGNORE),
+                          "PW_Basis::gatherp_scatters");
+#else
+        detail::check_mpi(MPI_Waitall(poolnproc_gps, blk.recv_requests.data(), MPI_STATUSES_IGNORE),
+                          "PW_Basis::gatherp_scatters");
+        detail::check_mpi(MPI_Waitall(poolnproc_gps, blk.send_requests.data(), MPI_STATUSES_IGNORE),
+                          "PW_Basis::gatherp_scatters");
+#endif
+        ModuleBase::timer::end(this->classname, "gatherp_overlap_comm");
 
         for (int ip = 0; ip < poolnproc_gps; ++ip)
         {
@@ -563,153 +503,6 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
 
     if (!detail::prefer_overlap_pipeline(this->npwtot, poolnproc_))
     {
-        if (detail::prefer_nonblocking_pt2pt(this->npwtot, poolnproc_))
-        {
-            const int send_count_ = startg_[poolnproc_ - 1] + this->numg[poolnproc_ - 1];
-            const int recv_count_ = startr_[poolnproc_ - 1] + this->numr[poolnproc_ - 1];
-            std::complex<T>* commbuf = this->acquire_comm_workbuf<T>(send_count_ + recv_count_);
-            std::complex<T>* sendbuf = commbuf;
-            std::complex<T>* recvbuf = commbuf + send_count_;
-
-            ModuleBase::timer::start(this->classname, "gathers_pack");
-#ifdef _OPENMP
-#pragma omp parallel for schedule(dynamic, 1)
-#endif
-            for (int ip = 0; ip < poolnproc_; ++ip)
-            {
-                if (ip == poolrank_ || numz_[ip] == 0)
-                {
-                    continue;
-                }
-                const int nzip = numz_[ip];
-                const std::complex<T>* __restrict__ inp_base = &in[startz_[ip]];
-                std::complex<T>* __restrict__ outp_base = &sendbuf[startg_[ip]];
-                for (int is = 0; is < nst_; ++is)
-                {
-                    ModulePW::simd_copy_n(reinterpret_cast<T*>(outp_base + is * nzip),
-                                          reinterpret_cast<const T*>(inp_base + is * nz_),
-                                          2 * nzip);
-                }
-            }
-            ModuleBase::timer::end(this->classname, "gathers_pack");
-
-            static thread_local std::vector<MPI_Request> recv_requests;
-            static thread_local std::vector<MPI_Request> send_requests;
-            static thread_local std::vector<MPI_Status> recv_status;
-            static thread_local std::vector<int> recv_indices;
-            recv_requests.assign(poolnproc_, MPI_REQUEST_NULL);
-            send_requests.assign(poolnproc_, MPI_REQUEST_NULL);
-            recv_status.resize(poolnproc_);
-            recv_indices.assign(poolnproc_, MPI_UNDEFINED);
-            int active_recvs = 0;
-            int active_sends = 0;
-
-            ModuleBase::timer::start(this->classname, "gathers_alltoallv");
-            for (int ip = 0; ip < poolnproc_; ++ip)
-            {
-                if (ip == poolrank_ || this->numr[ip] == 0)
-                {
-                    continue;
-                }
-                MPI_Irecv(&recvbuf[startr_[ip]], this->numr[ip], mpi_type, ip, 0,
-                          this->pool_world, &recv_requests[ip]);
-                ++active_recvs;
-            }
-            for (int ip = 0; ip < poolnproc_; ++ip)
-            {
-                if (ip == poolrank_ || this->numg[ip] == 0)
-                {
-                    continue;
-                }
-                MPI_Isend(&sendbuf[startg_[ip]], this->numg[ip], mpi_type, ip, 0,
-                          this->pool_world, &send_requests[ip]);
-                ++active_sends;
-            }
-            ModuleBase::timer::end(this->classname, "gathers_alltoallv");
-
-            ModuleBase::timer::start(this->classname, "gathers_clear");
-            const int nrxx_gsp = this->nrxx;
-#ifdef _OPENMP
-#pragma omp parallel for schedule(static)
-#endif
-            for (int i = 0; i < nrxx_gsp; ++i)
-            {
-                out[i] = std::complex<T>(0, 0);
-            }
-            ModuleBase::timer::end(this->classname, "gathers_clear");
-
-            auto unpack_peer = [&](const int ip)
-            {
-                const int peer_nst = nst_per_[ip];
-                if (peer_nst == 0 || nplane == 0)
-                {
-                    return;
-                }
-                const int istot0 = startr_[ip] / nplane;
-#ifdef _OPENMP
-#pragma omp parallel for schedule(static)
-#endif
-                for (int is = 0; is < peer_nst; ++is)
-                {
-                    const int istot = istot0 + is;
-                    const int ixy = istot2ixy[istot];
-                    std::complex<T>* outp = &out[ixy * nplane];
-                    std::complex<T>* inp = &recvbuf[startr_[ip] + is * nplane];
-                    detail::copy_complex_buffer(inp, outp, nplane);
-                }
-            };
-
-            ModuleBase::timer::start(this->classname, "gathers_unpack");
-            if (nplane > 0)
-            {
-                const int self_istot0 = startr_[poolrank_] / nplane;
-                const int self_nst = nst_per_[poolrank_];
-#ifdef _OPENMP
-#pragma omp parallel for schedule(static)
-#endif
-                for (int is = 0; is < self_nst; ++is)
-                {
-                    const int istot = self_istot0 + is;
-                    const int ixy = istot2ixy[istot];
-                    std::complex<T>* outp = &out[ixy * nplane];
-                    std::complex<T>* inp = &in[is * nz_ + startz_[poolrank_]];
-                    detail::copy_complex_buffer(inp, outp, nplane);
-                }
-            }
-            ModuleBase::timer::end(this->classname, "gathers_unpack");
-
-            while (active_recvs > 0)
-            {
-                int outcount = 0;
-                ModuleBase::timer::start(this->classname, "gathers_alltoallv");
-                MPI_Waitsome(poolnproc_,
-                             recv_requests.data(),
-                             &outcount,
-                             recv_indices.data(),
-                             recv_status.data());
-                ModuleBase::timer::end(this->classname, "gathers_alltoallv");
-                if (outcount == MPI_UNDEFINED)
-                {
-                    break;
-                }
-                for (int idx = 0; idx < outcount; ++idx)
-                {
-                    ModuleBase::timer::start(this->classname, "gathers_unpack");
-                    unpack_peer(recv_indices[idx]);
-                    ModuleBase::timer::end(this->classname, "gathers_unpack");
-                }
-                active_recvs -= outcount;
-            }
-
-            if (active_sends > 0)
-            {
-                ModuleBase::timer::start(this->classname, "gathers_alltoallv");
-                MPI_Waitall(poolnproc_, send_requests.data(), MPI_STATUSES_IGNORE);
-                ModuleBase::timer::end(this->classname, "gathers_alltoallv");
-            }
-            return;
-        }
-
 #ifdef _OPENMP
 #pragma omp parallel for collapse(2) schedule(static)
 #endif
@@ -745,15 +538,70 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
         return;
     }
 
-    const int send_count_ = startg_[poolnproc_ - 1] + this->numg[poolnproc_ - 1];
-    const int recv_count_ = startr_[poolnproc_ - 1] + this->numr[poolnproc_ - 1];
-    const int buf_span_ = send_count_ + recv_count_;
-    std::complex<T>* commbuf = this->acquire_comm_workbuf<T>(2 * buf_span_);
-    std::complex<T>* sendbufs[2] = {commbuf, commbuf + buf_span_};
+    const int nrxx_gsp = this->nrxx;
+    const int block_sticks = detail::overlap_block_sticks(nstot, std::max(nz_, nplane));
+    int nst_max = 0;
+    for (int ip = 0; ip < poolnproc_; ++ip)
+    {
+        nst_max = std::max(nst_max, nst_per_[ip]);
+    }
+    const int num_blocks = std::max(1, (nst_max + block_sticks - 1) / block_sticks);
+
+    if (num_blocks == 1)
+    {
+        ModuleBase::timer::start(this->classname, "gathers_single_block_fallback");
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) schedule(static)
+#endif
+        for (int ip = 0; ip < poolnproc_; ++ip)
+        {
+            for (int is = 0; is < nst_; ++is)
+            {
+                const int nzip = numz_[ip];
+                std::complex<T>* outp = &out[startg_[ip] + is * nzip];
+                const std::complex<T>* inp = &in[startz_[ip] + is * nz_];
+                detail::copy_complex_buffer(inp, outp, nzip);
+            }
+        }
+        detail::check_mpi(MPI_Alltoallv(out,
+                                        this->numg,
+                                        startg_,
+                                        mpi_type,
+                                        in,
+                                        this->numr,
+                                        startr_,
+                                        mpi_type,
+                                        this->pool_world),
+                          "PW_Basis::gathers_scatterp");
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+        for (int i = 0; i < nrxx_gsp; ++i)
+        {
+            out[i] = std::complex<T>(0, 0);
+        }
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+        for (int istot = 0; istot < nstot; ++istot)
+        {
+            const int ixy = istot2ixy[istot];
+            std::complex<T>* outp = &out[ixy * nplane];
+            const std::complex<T>* inp = &in[istot * nplane];
+            detail::copy_complex_buffer(inp, outp, nplane);
+        }
+        ModuleBase::timer::end(this->classname, "gathers_single_block_fallback");
+        return;
+    }
+
+    const int send_count_ = block_sticks * nz_;
+    const int recv_count_ = block_sticks * nplane * poolnproc_;
+    const int buf_span_ = std::max(1, send_count_ + recv_count_);
+    std::vector<std::complex<T>> commbuf(std::max(1, 2 * buf_span_));
+    std::complex<T>* sendbufs[2] = {commbuf.data(), commbuf.data() + buf_span_};
     std::complex<T>* recvbufs[2] = {sendbufs[0] + send_count_, sendbufs[1] + send_count_};
 
     ModuleBase::timer::start(this->classname, "gathers_clear");
-    const int nrxx_gsp = this->nrxx;
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
 #endif
@@ -762,15 +610,6 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
         out[i] = std::complex<T>(0, 0);
     }
     ModuleBase::timer::end(this->classname, "gathers_clear");
-
-    int block_sticks = detail::overlap_block_sticks(nst_, std::max(nz_, nplane));
-    MPI_Allreduce(MPI_IN_PLACE, &block_sticks, 1, MPI_INT, MPI_MIN, this->pool_world);
-    int nst_max = 0;
-    for (int ip = 0; ip < poolnproc_; ++ip)
-    {
-        nst_max = std::max(nst_max, nst_per_[ip]);
-    }
-    const int num_blocks = std::max(1, (nst_max + block_sticks - 1) / block_sticks);
 
     struct BlockState
     {
@@ -782,6 +621,7 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
         std::vector<int> rdispls;
         std::vector<MPI_Request> recv_requests;
         std::vector<MPI_Request> send_requests;
+        MPI_Request alltoall_request = MPI_REQUEST_NULL;
     };
 
     BlockState blocks[2];
@@ -805,6 +645,7 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
         std::fill(blk.rdispls.begin(), blk.rdispls.end(), 0);
         std::fill(blk.recv_requests.begin(), blk.recv_requests.end(), MPI_REQUEST_NULL);
         std::fill(blk.send_requests.begin(), blk.send_requests.end(), MPI_REQUEST_NULL);
+        blk.alltoall_request = MPI_REQUEST_NULL;
 
         int send_disp = 0;
         int recv_disp = 0;
@@ -863,20 +704,34 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
         }
         ModuleBase::timer::end(this->classname, "gathers_unpack");
 
-        ModuleBase::timer::start(this->classname, "gathers_alltoallv");
+        ModuleBase::timer::start(this->classname, "gathers_overlap_comm");
+#if MPI_VERSION >= 3
+        detail::check_mpi(MPI_Ialltoallv(sendbufs[buf_id],
+                                         blk.sendcounts.data(),
+                                         blk.sdispls.data(),
+                                         mpi_type,
+                                         recvbufs[buf_id],
+                                         blk.recvcounts.data(),
+                                         blk.rdispls.data(),
+                                         mpi_type,
+                                         this->pool_world,
+                                         &blk.alltoall_request),
+                          "PW_Basis::gathers_scatterp");
+#else
         for (int ip = 0; ip < poolnproc_; ++ip)
         {
             if (ip == poolrank_ || blk.recvcounts[ip] == 0)
             {
                 continue;
             }
-            MPI_Irecv(recvbufs[buf_id] + blk.rdispls[ip],
-                      blk.recvcounts[ip],
-                      mpi_type,
-                      ip,
-                      0,
-                      this->pool_world,
-                      &blk.recv_requests[ip]);
+            detail::check_mpi(MPI_Irecv(recvbufs[buf_id] + blk.rdispls[ip],
+                                         blk.recvcounts[ip],
+                                         mpi_type,
+                                         ip,
+                                         0,
+                                         this->pool_world,
+                                         &blk.recv_requests[ip]),
+                              "PW_Basis::gathers_scatterp");
         }
         for (int ip = 0; ip < poolnproc_; ++ip)
         {
@@ -884,23 +739,32 @@ void PW_Basis::gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const
             {
                 continue;
             }
-            MPI_Isend(sendbufs[buf_id] + blk.sdispls[ip],
-                      blk.sendcounts[ip],
-                      mpi_type,
-                      ip,
-                      0,
-                      this->pool_world,
-                      &blk.send_requests[ip]);
+            detail::check_mpi(MPI_Isend(sendbufs[buf_id] + blk.sdispls[ip],
+                                         blk.sendcounts[ip],
+                                         mpi_type,
+                                         ip,
+                                         0,
+                                         this->pool_world,
+                                         &blk.send_requests[ip]),
+                              "PW_Basis::gathers_scatterp");
         }
-        ModuleBase::timer::end(this->classname, "gathers_alltoallv");
+#endif
+        ModuleBase::timer::end(this->classname, "gathers_overlap_comm");
     };
 
     auto finalize_block = [&](BlockState& blk, const int buf_id)
     {
-        ModuleBase::timer::start(this->classname, "gathers_alltoallv");
-        MPI_Waitall(poolnproc_, blk.recv_requests.data(), MPI_STATUSES_IGNORE);
-        MPI_Waitall(poolnproc_, blk.send_requests.data(), MPI_STATUSES_IGNORE);
-        ModuleBase::timer::end(this->classname, "gathers_alltoallv");
+        ModuleBase::timer::start(this->classname, "gathers_overlap_comm");
+#if MPI_VERSION >= 3
+        detail::check_mpi(MPI_Wait(&blk.alltoall_request, MPI_STATUS_IGNORE),
+                          "PW_Basis::gathers_scatterp");
+#else
+        detail::check_mpi(MPI_Waitall(poolnproc_, blk.recv_requests.data(), MPI_STATUSES_IGNORE),
+                          "PW_Basis::gathers_scatterp");
+        detail::check_mpi(MPI_Waitall(poolnproc_, blk.send_requests.data(), MPI_STATUSES_IGNORE),
+                          "PW_Basis::gathers_scatterp");
+#endif
+        ModuleBase::timer::end(this->classname, "gathers_overlap_comm");
 
         for (int ip = 0; ip < poolnproc_; ++ip)
         {

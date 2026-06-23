@@ -2,7 +2,6 @@
 #include "source_base/global_function.h"
 #include "source_base/constants.h"
 #include "source_base/matrix3.h"
-#include "source_base/timer.h"
 #include <vector>
 
 /************************************************
@@ -280,7 +279,7 @@ TEST_F(PWBasisTEST,GetStartGR)
 	EXPECT_EQ(pwb.nrxx,8000);
 	EXPECT_EQ(pwb.nxy,400);
 	EXPECT_EQ(pwb.nplane,20);
-	EXPECT_EQ(pwb.nmaxgr,4000);
+	EXPECT_EQ(pwb.nmaxgr,8000);
 	EXPECT_EQ(pwb.numg[0],3120);
 	EXPECT_EQ(pwb.numr[0],3120);
 	EXPECT_EQ(pwb.startg[0],0);
@@ -363,94 +362,6 @@ TEST_F(PWBasisTEST,CollectUniqgg)
 	EXPECT_EQ(pwb.ig_gge0,9);
 	pwb.collect_uniqgg();
 	EXPECT_EQ(pwb.ngg,78);
-}
-
-TEST_F(PWBasisTEST, CacheStorageClearedOnParameterChange)
-{
-	double lat0 = 1.8897261254578281;
-	ModuleBase::Matrix3 latvec(10.0,0.0,0.0,
-				0.0,10.0,0.0,
-				0.0,0.0,10.0);
-	double gridecut=10.0;
-	bool gamma_only_in = true;
-	double pwecut_in = 11.0;
-	int distribution_type_in = 2;
-	bool xprime_in = true;
-	pwb.initgrids(lat0,latvec,gridecut);
-	pwb.initparameters(gamma_only_in,pwecut_in,distribution_type_in,xprime_in);
-	EXPECT_NO_THROW(pwb.setuptransform());
-	pwb.collect_local_pw();
-	pwb.collect_uniqgg();
-	EXPECT_GT(pwb.get_cache_stats().cache_bytes, 0);
-	pwb.initparameters(gamma_only_in,pwecut_in,distribution_type_in,xprime_in);
-	EXPECT_EQ(pwb.gg_cache_storage, nullptr);
-	EXPECT_EQ(pwb.gdirect_cache_storage, nullptr);
-	EXPECT_EQ(pwb.gcar_cache_storage, nullptr);
-	EXPECT_EQ(pwb.ig2igg_cache_storage, nullptr);
-	EXPECT_EQ(pwb.gg_uniq_cache_storage, nullptr);
-	EXPECT_EQ(pwb.get_cache_stats().cache_bytes, 0);
-}
-
-TEST_F(PWBasisTEST, CacheSignatureRejectsChangedLattice)
-{
-	double lat0 = 1.8897261254578281;
-	ModuleBase::Matrix3 latvec(10.0,0.0,0.0,
-				0.0,10.0,0.0,
-				0.0,0.0,10.0);
-	double gridecut=10.0;
-	bool gamma_only_in = true;
-	double pwecut_in = 11.0;
-	int distribution_type_in = 2;
-	bool xprime_in = true;
-	pwb.initgrids(lat0,latvec,gridecut);
-	pwb.initparameters(gamma_only_in,pwecut_in,distribution_type_in,xprime_in);
-	EXPECT_NO_THROW(pwb.setuptransform());
-	pwb.collect_local_pw();
-	int changed_ig = -1;
-	for (int ig = 0; ig < pwb.npw; ++ig)
-	{
-		if (std::abs(pwb.gdirect[ig].x) > 1e-12)
-		{
-			changed_ig = ig;
-			break;
-		}
-	}
-	ASSERT_GE(changed_ig, 0);
-	const double old_gg = pwb.gg[changed_ig];
-	pwb.collect_local_pw();
-	EXPECT_EQ(pwb.get_cache_stats().local_pw_hits, 1);
-	EXPECT_EQ(pwb.get_cache_stats().local_pw_misses, 1);
-
-	pwb.G.e11 *= 1.1;
-	pwb.GGT = pwb.G * pwb.GT;
-	pwb.collect_local_pw();
-	EXPECT_EQ(pwb.get_cache_stats().local_pw_hits, 1);
-	EXPECT_EQ(pwb.get_cache_stats().local_pw_misses, 2);
-	EXPECT_NE(pwb.gg[changed_ig], old_gg);
-}
-
-TEST_F(PWBasisTEST, CacheCollectionRecordsTimers)
-{
-	ModuleBase::timer::timer_pool.clear();
-	double lat0 = 1.8897261254578281;
-	ModuleBase::Matrix3 latvec(10.0,0.0,0.0,
-				0.0,10.0,0.0,
-				0.0,0.0,10.0);
-	double gridecut = 10.0;
-	bool gamma_only_in = true;
-	double pwecut_in = 11.0;
-	int distribution_type_in = 2;
-	bool xprime_in = true;
-	pwb.initgrids(lat0, latvec, gridecut);
-	pwb.initparameters(gamma_only_in, pwecut_in, distribution_type_in, xprime_in);
-	pwb.setuptransform();
-	pwb.collect_local_pw();
-	pwb.collect_uniqgg();
-	const auto& timer_pool = ModuleBase::timer::timer_pool[pwb.classname];
-	EXPECT_TRUE(timer_pool.count("collect_local_pw"));
-	EXPECT_TRUE(timer_pool.count("collect_uniqgg"));
-	EXPECT_GE(timer_pool.at("collect_local_pw").calls, 1u);
-	EXPECT_GE(timer_pool.at("collect_uniqgg").calls, 1u);
 }
 
 TEST_F(PWBasisTEST,ComplexTransformRoundTrip)

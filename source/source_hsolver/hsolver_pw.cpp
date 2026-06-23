@@ -282,16 +282,45 @@ void HSolverPW<T, Device>::hamiltSolvePsiK(hamilt::Hamilt<T, Device>* hm,
         // wrap the subspace_func into a lambda function
         // if S_orth is true, then assume psi is S-orthogonal, solve standard eigenproblem
         // otherwise, solve generalized eigenproblem
-        auto subspace_func = [hm, cur_nbasis](T* psi_in,
-                                              T* psi_out,
-                                              const int ld_psi,
-                                              const int nband,
-                                              const bool S_orth) {
+        typename DiagoCG<T, Device>::SubspaceFunc subspace_func = [hm, cur_nbasis](T* psi_in,
+                                                                                   T* psi_out,
+                                                                                   const int ld_psi,
+                                                                                   const int nband,
+                                                                                   const bool S_orth) {
             auto psi_in_wrapper = psi::Psi<T, Device>(psi_in, 1, nband, ld_psi, cur_nbasis);
             auto psi_out_wrapper = psi::Psi<T, Device>(psi_out, 1, nband, ld_psi, cur_nbasis);
             std::vector<Real> eigen(nband, 0.0);
-            DiagoIterAssist<T, Device>::diag_subspace(hm, psi_in_wrapper, psi_out_wrapper, eigen.data());
+            DiagoIterAssist<T, Device>::diag_subspace(hm, psi_in_wrapper, psi_out_wrapper, eigen.data(), 0, S_orth);
         };
+        std::vector<Real> inner_product_weights;
+        if (this->wfc_basis != nullptr && this->wfc_basis->gamma_only
+            && this->wfc_basis->gamma_compact.is_initialized())
+        {
+            const int ik = psi.get_current_k();
+            const int dim = psi.get_current_ngk();
+            inner_product_weights.resize(dim, Real(1.0));
+            for (int igl = 0; igl < dim; ++igl)
+            {
+                inner_product_weights[igl]
+                    = static_cast<Real>(this->wfc_basis->get_gamma_weight(ik, igl));
+            }
+            subspace_func = [hm, cur_nbasis, inner_product_weights](T* psi_in,
+                                                                    T* psi_out,
+                                                                    const int ld_psi,
+                                                                    const int nband,
+                                                                    const bool S_orth) {
+                auto psi_in_wrapper = psi::Psi<T, Device>(psi_in, 1, nband, ld_psi, cur_nbasis);
+                auto psi_out_wrapper = psi::Psi<T, Device>(psi_out, 1, nband, ld_psi, cur_nbasis);
+                std::vector<Real> eigen(nband, 0.0);
+                DiagoIterAssist<T, Device>::diag_subspace(hm,
+                                                          psi_in_wrapper,
+                                                          psi_out_wrapper,
+                                                          eigen.data(),
+                                                          0,
+                                                          S_orth,
+                                                          inner_product_weights);
+            };
+        }
         DiagoCG<T, Device> cg(this->basis_type,
                               this->calculation_type,
                               this->need_subspace,
@@ -299,17 +328,8 @@ void HSolverPW<T, Device>::hamiltSolvePsiK(hamilt::Hamilt<T, Device>* hm,
                               this->diag_thr,
                               this->diag_iter_max,
                               this->nproc_in_pool);
-        if (this->wfc_basis != nullptr && this->wfc_basis->gamma_only
-            && this->wfc_basis->gamma_compact.is_initialized())
+        if (!inner_product_weights.empty())
         {
-            const int ik = psi.get_current_k();
-            const int dim = psi.get_current_ngk();
-            std::vector<Real> inner_product_weights(dim, Real(1.0));
-            for (int igl = 0; igl < dim; ++igl)
-            {
-                inner_product_weights[igl]
-                    = static_cast<Real>(this->wfc_basis->get_gamma_weight(ik, igl));
-            }
             cg.set_inner_product_weights(inner_product_weights);
         }
 

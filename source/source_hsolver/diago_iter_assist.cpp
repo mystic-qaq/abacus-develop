@@ -25,7 +25,8 @@ void DiagoIterAssist<T, Device>::diag_subspace(const hamilt::Hamilt<T, Device>* 
                                                 Real* en,                           // [out] eigenvalues
                                                 int n_band, // [in] number of bands to be calculated, also number of rows
                                                            // of evc, if set to 0, n_band = nstart, default 0
-                                                const bool S_orth // [in] if true, psi is assumed to be already S-orthogonalized
+                                                const bool S_orth, // [in] if true, psi is assumed to be already S-orthogonalized
+                                                const std::vector<Real>& inner_product_weights
 )
 {
     ModuleBase::TITLE("DiagoIterAssist", "diag_subspace");
@@ -63,6 +64,12 @@ void DiagoIterAssist<T, Device>::diag_subspace(const hamilt::Hamilt<T, Device>* 
     // dmax is the leading dimension of psi
     const int dmin = psi.get_current_ngk();
     const int dmax = psi.get_nbasis();
+    if (!inner_product_weights.empty())
+    {
+        ModuleBase::CHECK_WARNING_QUIT(static_cast<int>(inner_product_weights.size()) < dmin,
+                                       "DiagoIterAssist::diag_subspace",
+                                       "inner-product weights size is smaller than current basis size.");
+    }
 
     T *temp = nullptr; /// temporary array for calculation of evc
     bool in_place = false; ///< if temp and evc share the same memory
@@ -85,13 +92,32 @@ void DiagoIterAssist<T, Device>::diag_subspace(const hamilt::Hamilt<T, Device>* 
         hpsi_info hpsi_in(&psi, all_bands_range, hpsi);
         pHamilt->ops->hPsi(hpsi_in);
 
+        const T* bra_psi = psi.get_pointer();
+        T* weighted_psi = nullptr;
+        if (!inner_product_weights.empty())
+        {
+            resmem_complex_op()(weighted_psi, nstart * dmax, "DiagSub::weighted_psi");
+            setmem_complex_op()(weighted_psi, 0, nstart * dmax);
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) schedule(static)
+#endif
+            for (int ib = 0; ib < nstart; ++ib)
+            {
+                for (int ig = 0; ig < dmin; ++ig)
+                {
+                    weighted_psi[ib * dmax + ig] = inner_product_weights[ig] * psi(ib, ig);
+                }
+            }
+            bra_psi = weighted_psi;
+        }
+
         ModuleBase::gemm_op<T, Device>()('C',
                                          'N',
                                          nstart,
                                          nstart,
                                          dmin,
                                          &one,
-                                         psi.get_pointer(),
+                                         bra_psi,
                                          dmax,
                                          hpsi,
                                          dmax,
@@ -111,13 +137,17 @@ void DiagoIterAssist<T, Device>::diag_subspace(const hamilt::Hamilt<T, Device>* 
                                             nstart,
                                             dmin,
                                             &one,
-                                            psi.get_pointer(),
+                                            bra_psi,
                                             dmax,
                                             spsi,
                                             dmax,
                                             &zero,
                                             scc,
                                             nstart);
+        }
+        if (!inner_product_weights.empty())
+        {
+            delmem_complex_op()(weighted_psi);
         }
     }
 

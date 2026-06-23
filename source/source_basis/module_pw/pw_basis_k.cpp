@@ -9,6 +9,10 @@
 #include <vector>
 namespace ModulePW
 {
+namespace
+{
+constexpr double gamma_k_tolerance = 1.0e-12;
+}
 
 PW_Basis_K::PW_Basis_K()
 {
@@ -23,6 +27,7 @@ PW_Basis_K::~PW_Basis_K()
     delete[] npwk;
     delete[] igl2isz_k;
     delete[] igl2ig_k;
+    delete[] gk2;
 #if defined(__CUDA) || defined(__ROCM)
     if (this->device == "gpu")
     {
@@ -45,49 +50,6 @@ PW_Basis_K::~PW_Basis_K()
 #if defined(__CUDA) || defined(__ROCM)
     }
 #endif
-    this->clear_k_cache_storage();
-}
-
-void PW_Basis_K::clear_k_cache_storage()
-{
-    std::lock_guard<std::mutex> guard(this->cache_mutex);
-    this->invalidate_cache_unlocked();
-}
-
-PW_Basis_K::KCacheStats PW_Basis_K::get_k_cache_stats() const
-{
-    std::lock_guard<std::mutex> guard(this->cache_mutex);
-    KCacheStats stats;
-    const auto base_stats = PW_Basis::get_cache_stats_unlocked();
-    static_cast<PW_Basis::CacheStats&>(stats) = base_stats;
-    stats.gcar_hits = this->gcar_cache_hits.load();
-    stats.gcar_misses = this->gcar_cache_misses.load();
-    stats.gk2_hits = this->gk2_cache_hits.load();
-    stats.gk2_misses = this->gk2_cache_misses.load();
-    if (this->gcar_cache_valid.load()
-        && this->gcar != nullptr
-        && this->npwk_max > 0
-        && this->nks > 0)
-    {
-        stats.cache_bytes += sizeof(ModuleBase::Vector3<double>) * this->npwk_max * this->nks;
-    }
-    if (this->gk_cache_valid.load()
-        && this->gk2 != nullptr
-        && this->npwk_max > 0
-        && this->nks > 0)
-    {
-        stats.cache_bytes += sizeof(double) * this->npwk_max * this->nks;
-    }
-    return stats;
-}
-
-void PW_Basis_K::reset_k_cache_stats()
-{
-    PW_Basis::reset_cache_stats();
-    this->gcar_cache_hits.store(0);
-    this->gcar_cache_misses.store(0);
-    this->gk2_cache_hits.store(0);
-    this->gk2_cache_misses.store(0);
 }
 
 void PW_Basis_K::initparameters(const bool gamma_only_in,
@@ -103,38 +65,39 @@ void PW_Basis_K::initparameters(const bool gamma_only_in,
     delete[] this->kvec_c;
     this->kvec_c = new ModuleBase::Vector3<double>[nks];
 
-    double kmaxmod = 0;
+    double kmaxmod = 0.0;
+    std::vector<double> kmods(this->nks, 0.0);
     for (int ik = 0; ik < this->nks; ++ik)
     {
         this->kvec_d[ik] = kvec_d_in[ik];
         this->kvec_c[ik] = this->kvec_d[ik] * this->G;
-        double kmod = sqrt(this->kvec_c[ik] * this->kvec_c[ik]);
+        const double kmod = sqrt(this->kvec_c[ik] * this->kvec_c[ik]);
+        kmods[ik] = kmod;
         if (kmod > kmaxmod)
         {
             kmaxmod = kmod;
         }
     }
+
+    delete[] this->is_gamma_k;
+    this->is_gamma_k = new bool[this->nks];
+    bool all_gamma_k = true;
+    for (int ik = 0; ik < this->nks; ++ik)
+    {
+        this->is_gamma_k[ik] = (kmods[ik] < gamma_k_tolerance);
+        all_gamma_k = all_gamma_k && this->is_gamma_k[ik];
+    }
+
+    const double cutoff_kmaxmod = all_gamma_k ? 0.0 : kmaxmod;
     this->gk_ecut = gk_ecut_in / this->tpiba2;
-    this->ggecut = pow(sqrt(this->gk_ecut) + kmaxmod, 2);
+    this->ggecut = pow(sqrt(this->gk_ecut) + cutoff_kmaxmod, 2);
     if (this->ggecut > this->gridecut_lat)
     {
         this->ggecut = this->gridecut_lat;
-        this->gk_ecut = pow(sqrt(this->ggecut) - kmaxmod, 2);
+        this->gk_ecut = pow(sqrt(this->ggecut) - cutoff_kmaxmod, 2);
     }
 
-    this->gamma_only = gamma_only_in;
-    if (kmaxmod > 0)
-    {
-        this->gamma_only = false; // if it is not the gamma point, we do not use gamma_only
-    }
-    // per-k gamma tracking: mark each k-point as Gamma if its |k| < 1e-12
-    delete[] this->is_gamma_k;
-    this->is_gamma_k = new bool[this->nks];
-    for (int ik = 0; ik < this->nks; ++ik)
-    {
-        double kmod = sqrt(this->kvec_c[ik] * this->kvec_c[ik]);
-        this->is_gamma_k[ik] = (kmod < 1e-12);
-    }
+    this->gamma_only = gamma_only_in && all_gamma_k;
     this->xprime = xprime_in;
     this->fftny = this->ny;
     this->fftnx = this->nx;
@@ -153,7 +116,6 @@ void PW_Basis_K::initparameters(const bool gamma_only_in,
     this->fftnxy = this->fftnx * this->fftny;
     this->fftnxyz = this->fftnxy * this->fftnz;
     this->distribution_type = distribution_type_in;
-    this->invalidate_cache();
 #if defined(__CUDA) || defined(__ROCM)
     if (this->device == "gpu")
     {
@@ -182,7 +144,6 @@ void PW_Basis_K::initparameters(const bool gamma_only_in,
 
 void PW_Basis_K::setupIndGk()
 {
-    this->invalidate_cache();
     // count npwk
     this->npwk_max = 0;
     delete[] this->npwk;
@@ -265,34 +226,6 @@ void PW_Basis_K::setupIndGk()
     return;
 }
 
-ModuleBase::Vector3<double> PW_Basis_K::cal_GplusK_cartesian(const int ik, const int ig) const
-{
-    int isz = this->ig2isz[ig];
-    int iz = isz % this->nz;
-    int is = isz / this->nz;
-    int ix = this->is2fftixy[is] / this->fftny;
-    int iy = this->is2fftixy[is] % this->fftny;
-    if (ix >= int(this->nx / 2) + 1)
-    {
-        ix -= this->nx;
-    }
-    if (iy >= int(this->ny / 2) + 1)
-    {
-        iy -= this->ny;
-    }
-    if (iz >= int(this->nz / 2) + 1)
-    {
-        iz -= this->nz;
-    }
-    ModuleBase::Vector3<double> f;
-    f.x = ix;
-    f.y = iy;
-    f.z = iz;
-    f = f * this->G;
-    ModuleBase::Vector3<double> g_temp_ = this->kvec_c[ik] + f;
-    return g_temp_;
-}
-
 ///
 /// distribute plane wave basis and real-space grids to different processors
 /// set up maps for fft and create arrays for MPI_Alltoall
@@ -348,60 +281,19 @@ void PW_Basis_K::setuptransform()
 
 void PW_Basis_K::collect_local_pw(const double& erf_ecut_in, const double& erf_height_in, const double& erf_sigma_in)
 {
+    this->erf_ecut = erf_ecut_in;
+    this->erf_height = erf_height_in;
+    this->erf_sigma = erf_sigma_in;
     if (this->npwk_max <= 0)
     {
         return;
     }
-    ModuleBase::timer::start(this->classname, "collect_local_pw");
-    std::lock_guard<std::mutex> guard(this->cache_mutex);
-    const bool locked_gcar_hit = this->gcar_cache_valid.load() && this->gcar != nullptr;
-    const bool locked_gk2_hit = this->gk_cache_valid.load()
-                                && this->gk2 != nullptr
-                                && this->erf_ecut == erf_ecut_in
-                                && this->erf_height == erf_height_in
-                                && this->erf_sigma == erf_sigma_in;
-    if (locked_gcar_hit && locked_gk2_hit)
-    {
-        ModuleBase::timer::start(this->classname, "collect_local_pw_cache_hit");
-        this->gcar_cache_hits.fetch_add(1);
-        this->gk2_cache_hits.fetch_add(1);
-        ModuleBase::timer::end(this->classname, "collect_local_pw_cache_hit");
-        ModuleBase::timer::end(this->classname, "collect_local_pw");
-        return;
-    }
-    if (!locked_gcar_hit)
-    {
-        ModuleBase::timer::start(this->classname, "collect_local_pw_build_gcar");
-    }
-    if (!locked_gk2_hit)
-    {
-        ModuleBase::timer::start(this->classname, "collect_local_pw_build_gk2");
-    }
-    if (locked_gcar_hit)
-    {
-        this->gcar_cache_hits.fetch_add(1);
-    }
-    else
-    {
-        this->gcar_cache_misses.fetch_add(1);
-        this->k_gcar_cache_storage.reset(new ModuleBase::Vector3<double>[this->npwk_max * this->nks]);
-        this->gcar = this->k_gcar_cache_storage.get();
-        ModuleBase::Memory::record("PW_B_K::gcar", sizeof(ModuleBase::Vector3<double>) * this->npwk_max * this->nks);
-    }
-    if (locked_gk2_hit)
-    {
-        this->gk2_cache_hits.fetch_add(1);
-    }
-    else
-    {
-        this->gk2_cache_misses.fetch_add(1);
-        this->k_gk2_cache_storage.reset(new double[this->npwk_max * this->nks]);
-        this->gk2 = this->k_gk2_cache_storage.get();
-        ModuleBase::Memory::record("PW_B_K::gk2", sizeof(double) * this->npwk_max * this->nks);
-    }
-    this->erf_ecut = erf_ecut_in;
-    this->erf_height = erf_height_in;
-    this->erf_sigma = erf_sigma_in;
+    delete[] gk2;
+    delete[] gcar;
+    this->gk2 = new double[this->npwk_max * this->nks];
+    this->gcar = new ModuleBase::Vector3<double>[this->npwk_max * this->nks];
+    ModuleBase::Memory::record("PW_B_K::gk2", sizeof(double) * this->npwk_max * this->nks);
+    ModuleBase::Memory::record("PW_B_K::gcar", sizeof(ModuleBase::Vector3<double>) * this->npwk_max * this->nks);
 
     ModuleBase::Vector3<double> f;
     for (int ik = 0; ik < this->nks; ++ik)
@@ -431,55 +323,36 @@ void PW_Basis_K::collect_local_pw(const double& erf_ecut_in, const double& erf_h
             f.y = iy;
             f.z = iz;
 
-            if (!locked_gcar_hit)
+            this->gcar[ik * npwk_max + igl] = f * this->G;
+            double temp_gk2 = (f + kv) * (this->GGT * (f + kv));
+            if (erf_height > 0)
             {
-                this->gcar[ik * npwk_max + igl] = f * this->G;
+                this->gk2[ik * npwk_max + igl]
+                    = temp_gk2 + erf_height / tpiba2 * (1.0 + std::erf((temp_gk2 * tpiba2 - erf_ecut) / erf_sigma));
             }
-            if (!locked_gk2_hit)
+            else
             {
-                const double temp_gk2 = (f + kv) * (this->GGT * (f + kv));
-                if (erf_height > 0)
-                {
-                    this->gk2[ik * npwk_max + igl]
-                        = temp_gk2 + erf_height / tpiba2 * (1.0 + std::erf((temp_gk2 * tpiba2 - erf_ecut) / erf_sigma));
-                }
-                else
-                {
-                    this->gk2[ik * npwk_max + igl] = temp_gk2;
-                }
+                this->gk2[ik * npwk_max + igl] = temp_gk2;
             }
         }
     }
-    if (!locked_gcar_hit)
-    {
-        this->sync_gcar_device_cache();
-        this->gcar_cache_valid.store(true);
-        ModuleBase::timer::end(this->classname, "collect_local_pw_build_gcar");
-    }
-    if (!locked_gk2_hit)
-    {
-        this->sync_gk2_device_cache();
-        this->gk_cache_valid.store(true);
-        ModuleBase::timer::end(this->classname, "collect_local_pw_build_gk2");
-    }
-    ModuleBase::timer::end(this->classname, "collect_local_pw");
-}
-
-void PW_Basis_K::sync_gcar_device_cache()
-{
 #if defined(__CUDA) || defined(__ROCM)
     if (this->device == "gpu")
     {
         if (this->float_data_)
         {
+            resmem_sd_op()(this->s_gk2, this->npwk_max * this->nks);
             resmem_sd_op()(this->s_gcar, this->npwk_max * this->nks * 3);
+            castmem_d2s_h2d_op()(this->s_gk2, this->gk2, this->npwk_max * this->nks);
             castmem_d2s_h2d_op()(this->s_gcar,
                                  reinterpret_cast<double*>(&this->gcar[0][0]),
                                  this->npwk_max * this->nks * 3);
         }
         if (this->double_data_)
         {
+            resmem_dd_op()(this->d_gk2, this->npwk_max * this->nks);
             resmem_dd_op()(this->d_gcar, this->npwk_max * this->nks * 3);
+            syncmem_d2d_h2d_op()(this->d_gk2, this->gk2, this->npwk_max * this->nks);
             syncmem_d2d_h2d_op()(this->d_gcar,
                                  reinterpret_cast<double*>(&this->gcar[0][0]),
                                  this->npwk_max * this->nks * 3);
@@ -490,7 +363,9 @@ void PW_Basis_K::sync_gcar_device_cache()
 #endif
         if (this->float_data_)
         {
+            resmem_sh_op()(this->s_gk2, this->npwk_max * this->nks, "PW_B_K::s_gk2");
             resmem_sh_op()(this->s_gcar, this->npwk_max * this->nks * 3, "PW_B_K::s_gcar");
+            castmem_d2s_h2h_op()(this->s_gk2, this->gk2, this->npwk_max * this->nks);
             castmem_d2s_h2h_op()(this->s_gcar,
                                  reinterpret_cast<double*>(&this->gcar[0][0]),
                                  this->npwk_max * this->nks * 3);
@@ -498,6 +373,7 @@ void PW_Basis_K::sync_gcar_device_cache()
         if (this->double_data_)
         {
             this->d_gcar = reinterpret_cast<double*>(&this->gcar[0][0]);
+            this->d_gk2 = this->gk2;
         }
         // There's no need to allocate double pointers while in a CPU environment.
 #if defined(__CUDA) || defined(__ROCM)
@@ -505,37 +381,32 @@ void PW_Basis_K::sync_gcar_device_cache()
 #endif
 }
 
-void PW_Basis_K::sync_gk2_device_cache()
+ModuleBase::Vector3<double> PW_Basis_K::cal_GplusK_cartesian(const int ik, const int ig) const
 {
-#if defined(__CUDA) || defined(__ROCM)
-    if (this->device == "gpu")
+    int isz = this->ig2isz[ig];
+    int iz = isz % this->nz;
+    int is = isz / this->nz;
+    int ix = this->is2fftixy[is] / this->fftny;
+    int iy = this->is2fftixy[is] % this->fftny;
+    if (ix >= int(this->nx / 2) + 1)
     {
-        if (this->float_data_)
-        {
-            resmem_sd_op()(this->s_gk2, this->npwk_max * this->nks);
-            castmem_d2s_h2d_op()(this->s_gk2, this->gk2, this->npwk_max * this->nks);
-        }
-        if (this->double_data_)
-        {
-            resmem_dd_op()(this->d_gk2, this->npwk_max * this->nks);
-            syncmem_d2d_h2d_op()(this->d_gk2, this->gk2, this->npwk_max * this->nks);
-        }
+        ix -= this->nx;
     }
-    else
+    if (iy >= int(this->ny / 2) + 1)
     {
-#endif
-        if (this->float_data_)
-        {
-            resmem_sh_op()(this->s_gk2, this->npwk_max * this->nks, "PW_B_K::s_gk2");
-            castmem_d2s_h2h_op()(this->s_gk2, this->gk2, this->npwk_max * this->nks);
-        }
-        if (this->double_data_)
-        {
-            this->d_gk2 = this->gk2;
-        }
-#if defined(__CUDA) || defined(__ROCM)
+        iy -= this->ny;
     }
-#endif
+    if (iz >= int(this->nz / 2) + 1)
+    {
+        iz -= this->nz;
+    }
+    ModuleBase::Vector3<double> f;
+    f.x = ix;
+    f.y = iy;
+    f.z = iz;
+    f = f * this->G;
+    ModuleBase::Vector3<double> g_temp_ = this->kvec_c[ik] + f;
+    return g_temp_;
 }
 
 double& PW_Basis_K::getgk2(const int ik, const int igl) const
@@ -680,27 +551,23 @@ double* PW_Basis_K::get_kvec_c_data() const
 template <>
 float* PW_Basis_K::get_gcar_data() const
 {
-    std::lock_guard<std::mutex> guard(this->cache_mutex);
-    return this->gcar_cache_valid.load() ? this->s_gcar : nullptr;
+    return this->s_gcar;
 }
 template <>
 double* PW_Basis_K::get_gcar_data() const
 {
-    std::lock_guard<std::mutex> guard(this->cache_mutex);
-    return this->gcar_cache_valid.load() ? this->d_gcar : nullptr;
+    return this->d_gcar;
 }
 
 template <>
 float* PW_Basis_K::get_gk2_data() const
 {
-    std::lock_guard<std::mutex> guard(this->cache_mutex);
-    return this->gk_cache_valid.load() ? this->s_gk2 : nullptr;
+    return this->s_gk2;
 }
 template <>
 double* PW_Basis_K::get_gk2_data() const
 {
-    std::lock_guard<std::mutex> guard(this->cache_mutex);
-    return this->gk_cache_valid.load() ? this->d_gk2 : nullptr;
+    return this->d_gk2;
 }
 
 } // namespace ModulePW

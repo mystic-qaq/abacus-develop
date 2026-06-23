@@ -8,20 +8,11 @@
 #include "source_base/vector3.h"
 #include <complex>
 #include "source_base/module_fft/fft_bundle.h"
-#include "compact_gamma_data.h"
 #include "gamma_compact.h"
 #include <cstring>
-#include <map>
-#include <tuple>
-#include <vector>
-#include <atomic>
 #ifdef __MPI
 #include "mpi.h"
 #endif
-#include <cstddef>
-#include <cstdint>
-#include <memory>
-#include <mutex>
 
 namespace ModulePW
 {
@@ -66,21 +57,8 @@ class PW_Basis
 {
 
 public:
-    struct CacheStats
-    {
-        std::uint64_t local_pw_hits = 0;
-        std::uint64_t local_pw_misses = 0;
-        std::uint64_t uniqgg_hits = 0;
-        std::uint64_t uniqgg_misses = 0;
-        std::size_t cache_bytes = 0;
-    };
-
     std::string classname;
     PW_Basis();
-    // PW_Basis owns FFT/distribution maps through raw pointers, so copying would
-    // create ambiguous ownership and stale cache pointers.
-    PW_Basis(const PW_Basis& other) = delete;
-    PW_Basis& operator=(const PW_Basis& other) = delete;
     PW_Basis(std::string device_, std::string precision_);
     virtual ~PW_Basis();
     //Init mpi parameters
@@ -160,73 +138,8 @@ public:
     //distribute plane waves and grids and set up fft
     void setuptransform();
 
-    CacheStats get_cache_stats() const;
-    void reset_cache_stats();
-
 protected:
     int *startnsz_per=nullptr;//useless intermediate variable// startnsz_per[ip]: starting is * nz stick in the ip^th proc.
-
-    virtual void invalidate_cache()
-    {
-        std::lock_guard<std::mutex> guard(this->cache_mutex);
-        this->invalidate_cache_unlocked();
-    }
-
-    void clear_owned_cache();
-
-    // Public gg/gcar/gdirect pointers are non-owning views of these cache buffers.
-    std::atomic<bool> local_pw_cache_valid{false};
-    std::atomic<bool> uniqgg_cache_valid{false};
-    mutable std::mutex cache_mutex;
-    std::unique_ptr<double[]> gg_cache_storage;
-    std::unique_ptr<ModuleBase::Vector3<double>[]> gdirect_cache_storage;
-    std::unique_ptr<ModuleBase::Vector3<double>[]> gcar_cache_storage;
-    std::unique_ptr<int[]> ig2igg_cache_storage;
-    std::unique_ptr<double[]> gg_uniq_cache_storage;
-    std::atomic<std::uint64_t> local_pw_cache_hits{0};
-    std::atomic<std::uint64_t> local_pw_cache_misses{0};
-    std::atomic<std::uint64_t> uniqgg_cache_hits{0};
-    std::atomic<std::uint64_t> uniqgg_cache_misses{0};
-
-    struct CacheSignature
-    {
-        double lat0 = 0.0;
-        double tpiba = 0.0;
-        double tpiba2 = 0.0;
-        int nx = 0;
-        int ny = 0;
-        int nz = 0;
-        int fftnx = 0;
-        int fftny = 0;
-        int fftnz = 0;
-        int npw = 0;
-        ModuleBase::Matrix3 G;
-        ModuleBase::Matrix3 GT;
-        ModuleBase::Matrix3 GGT;
-    };
-    CacheSignature make_cache_signature() const;
-    bool cache_signature_matches(const CacheSignature& signature) const;
-    CacheSignature local_pw_cache_signature;
-    CacheSignature uniqgg_cache_signature;
-
-    virtual void invalidate_cache_unlocked()
-    {
-        this->local_pw_cache_valid.store(false);
-        this->uniqgg_cache_valid.store(false);
-        this->gg_cache_storage.reset();
-        this->gdirect_cache_storage.reset();
-        this->gcar_cache_storage.reset();
-        this->ig2igg_cache_storage.reset();
-        this->gg_uniq_cache_storage.reset();
-        this->gg = nullptr;
-        this->gdirect = nullptr;
-        this->gcar = nullptr;
-        this->ig2igg = nullptr;
-        this->gg_uniq = nullptr;
-        this->ngg = 0;
-        this->ig_gge0 = -1;
-    }
-    CacheStats get_cache_stats_unlocked() const;
 
     //distribute plane waves to different processors
     void distribute_g();
@@ -357,40 +270,6 @@ public:
                     std::complex<FPTYPE>* out,
                     const bool add = false,
                     const FPTYPE factor = 1.0) const; // in:(nz, ns)  ; out(nplane,nx*ny)
-
-    /**
-     * @brief Gamma-only reciprocal-to-real transform from compact reciprocal storage.
-     *
-     * The existing FFT kernels still consume dense reciprocal buffers.  This wrapper
-     * keeps the public transform semantics unchanged while allowing rho(G)/V(G)
-     * to be stored compactly between transforms and expanded only for execution.
-     */
-    template <typename FPTYPE>
-    void recip2real_compact(const CompactGammaData<FPTYPE>& in,
-                            FPTYPE* out,
-                            const bool add = false,
-                            const FPTYPE factor = 1.0) const;
-
-    template <typename FPTYPE>
-    void recip2real_compact(const CompactGammaData<FPTYPE>& in,
-                            std::complex<FPTYPE>* out,
-                            const bool add = false,
-                            const FPTYPE factor = 1.0) const;
-
-    /**
-     * @brief Real-to-reciprocal transform that returns compact Gamma-only storage.
-     */
-    template <typename FPTYPE>
-    void real2recip_compact(const FPTYPE* in,
-                            CompactGammaData<FPTYPE>& out,
-                            const bool add = false,
-                            const FPTYPE factor = 1.0) const;
-
-    template <typename FPTYPE>
-    void real2recip_compact(const std::complex<FPTYPE>* in,
-                            CompactGammaData<FPTYPE>& out,
-                            const bool add = false,
-                            const FPTYPE factor = 1.0) const;
     
     template <typename FPTYPE>
     void real2recip_gpu(const FPTYPE* in,
@@ -534,82 +413,6 @@ public:
                         this->real2recip_gpu(in,out,add,factor);
                        };
 
-    template <typename FPTYPE>
-    CompactGammaData<FPTYPE> compress_gamma_only_data(const std::complex<FPTYPE>* dense) const
-    {
-        const std::vector<int> minus_g = this->gamma_only_minus_g_map();
-        return compress_gamma_data(dense, this->npw, minus_g.empty() ? nullptr : minus_g.data());
-    }
-
-    template <typename FPTYPE>
-    void decompress_gamma_only_data(const CompactGammaData<FPTYPE>& compact, std::complex<FPTYPE>* dense) const
-    {
-        compact.decompress_to(dense);
-    }
-
-    template <typename FPTYPE>
-    std::size_t gamma_only_compact_bytes() const
-    {
-        const std::vector<int> minus_g = this->gamma_only_minus_g_map();
-        return CompactGammaData<FPTYPE>(this->npw, minus_g.empty() ? nullptr : minus_g.data()).compact_bytes();
-    }
-
-    /**
-     * @brief Whether this local Gamma-only PW basis has an explicit -G pair map.
-     *
-     * The compact storage path is enabled only when Gamma-only is active and every
-     * local G vector can be paired with its conjugate partner in the same dense
-     * reciprocal buffer.  Other cases keep using the legacy dense path.
-     */
-    bool can_use_gamma_only_compact() const
-    {
-        if (!this->gamma_only || this->npw <= 0 || this->gdirect == nullptr)
-        {
-            return false;
-        }
-        return !this->gamma_only_minus_g_map().empty();
-    }
-
-    /**
-     * @brief Build ig -> i(-G) map from ABACUS G-vector ordering.
-     *
-     * This avoids assuming that ABACUS stores conjugate pairs by linear index.
-     * Empty return means the local dense buffer cannot be represented safely by
-     * CompactGammaData and callers must fall back to dense storage.
-     */
-    std::vector<int> gamma_only_minus_g_map() const
-    {
-        std::vector<int> minus_g(this->npw, -1);
-        if (this->npw <= 0 || this->gdirect == nullptr)
-        {
-            return minus_g;
-        }
-
-        std::map<std::tuple<int, int, int>, int> index_by_g;
-        for (int ig = 0; ig < this->npw; ++ig)
-        {
-            const auto key = std::make_tuple(static_cast<int>(this->gdirect[ig].x),
-                                             static_cast<int>(this->gdirect[ig].y),
-                                             static_cast<int>(this->gdirect[ig].z));
-            index_by_g[key] = ig;
-        }
-
-        for (int ig = 0; ig < this->npw; ++ig)
-        {
-            const auto mate_key = std::make_tuple(-static_cast<int>(this->gdirect[ig].x),
-                                                  -static_cast<int>(this->gdirect[ig].y),
-                                                  -static_cast<int>(this->gdirect[ig].z));
-            const auto mate = index_by_g.find(mate_key);
-            if (mate == index_by_g.end())
-            {
-                minus_g.clear();
-                return minus_g;
-            }
-            minus_g[ig] = mate->second;
-        }
-        return minus_g;
-    }
-
   protected:
     //gather planes and scatter sticks of all processors
     template <typename T>
@@ -618,10 +421,6 @@ public:
     // gather sticks of and scatter planes of all processors
     template <typename T>
     void gathers_scatterp(std::complex<T>* in, std::complex<T>* out) const;
-
-    /// @brief Acquire a thread-local work buffer for non-blocking MPI communication
-    template <typename T>
-    std::complex<T>* acquire_comm_workbuf(const int size) const;
 
   public:
     //get fftixy2is;
@@ -646,23 +445,6 @@ protected:
   bool float_data_ = false;         ///< if has float data
 };
 }
-
-template <>
-inline std::complex<float>* ModulePW::PW_Basis::acquire_comm_workbuf<float>(const int size) const
-{
-    static thread_local std::vector<std::complex<float>> buf;
-    buf.resize(size);
-    return buf.data();
-}
-
-template <>
-inline std::complex<double>* ModulePW::PW_Basis::acquire_comm_workbuf<double>(const int size) const
-{
-    static thread_local std::vector<std::complex<double>> buf;
-    buf.resize(size);
-    return buf.data();
-}
-
 #endif // PWBASIS_H
 #include "pw_basis_sup.h"
 #include "pw_basis_big.h" //temporary it will be removed

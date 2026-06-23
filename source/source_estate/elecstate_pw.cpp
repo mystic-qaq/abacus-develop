@@ -10,6 +10,8 @@
 #include "source_io/module_parameter/parameter.h"
 #include "source_pw/module_pwdft/vnl_pw.h"
 
+#include <vector>
+
 namespace elecstate {
 
 template <typename T, typename Device>
@@ -289,6 +291,24 @@ void ElecStatePW<T, Device>::cal_becsum(const psi::Psi<T, Device>& psi)
         const T* psi_now = psi.get_pointer();
         const int currect_spin = this->klist->isk[ik];
         const int npw = psi.get_current_ngk();
+        const bool gamma_compact_wfc = this->basis != nullptr && this->basis->gamma_only
+                                       && this->basis->gamma_compact.is_initialized();
+        std::vector<T> weighted_psi;
+        if (gamma_compact_wfc)
+        {
+            weighted_psi.resize(nbands * npwx);
+            for (int ib = 0; ib < nbands; ++ib)
+            {
+                const T* psi_band = psi_now + ib * npwx;
+                T* weighted_band = weighted_psi.data() + ib * npwx;
+                for (int ig = 0; ig < npw; ++ig)
+                {
+                    const Real weight = static_cast<Real>(this->basis->get_gamma_weight(ik, ig));
+                    weighted_band[ig] = weight * psi_band[ig];
+                }
+            }
+            psi_now = weighted_psi.data();
+        }
 
         // get |beta>
         if (this->ppcell->nkb > 0)
@@ -331,6 +351,17 @@ void ElecStatePW<T, Device>::cal_becsum(const psi::Psi<T, Device>& psi)
                       this->ppcell->nkb);
         }
         Parallel_Reduce::reduce_pool(becp, this->ppcell->nkb * nbands);
+        if (gamma_compact_wfc)
+        {
+            for (int ib = 0; ib < nbands; ++ib)
+            {
+                for (int ikb = 0; ikb < this->ppcell->nkb; ++ikb)
+                {
+                    T& value = becp[ib * this->ppcell->nkb + ikb];
+                    value = T(std::real(value));
+                }
+            }
+        }
 
         // sum over bands: \sum_i <psi_i|beta_l><beta_m|psi_i> w_i
         for (int it = 0; it < ucell->ntype; it++)
