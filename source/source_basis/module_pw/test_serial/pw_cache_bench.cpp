@@ -54,6 +54,13 @@ void bench_pw_basis()
     ModuleBase::timer::timer_pool.clear();
 
     ModulePW::PW_Basis basis;
+#ifdef __MPI
+    int pool_size = 1;
+    int pool_rank = 0;
+    MPI_Comm_size(MPI_COMM_WORLD, &pool_size);
+    MPI_Comm_rank(MPI_COMM_WORLD, &pool_rank);
+    basis.initmpi(pool_size, pool_rank, MPI_COMM_WORLD);
+#endif
     const ModuleBase::Matrix3 latvec(1, 0, 0, 0, 1, 0, 0, 0, 1);
     const double lat0 = 10.0;
     const double wfcecut = 50.0;
@@ -96,6 +103,13 @@ void bench_pw_basis_k()
     ModuleBase::timer::timer_pool.clear();
 
     ModulePW::PW_Basis_K basis("cpu", "double");
+#ifdef __MPI
+    int pool_size = 1;
+    int pool_rank = 0;
+    MPI_Comm_size(MPI_COMM_WORLD, &pool_size);
+    MPI_Comm_rank(MPI_COMM_WORLD, &pool_rank);
+    basis.initmpi(pool_size, pool_rank, MPI_COMM_WORLD);
+#endif
     const ModuleBase::Matrix3 latvec(10.0, 0.0, 0.0,
                                      0.0, 10.0, 0.0,
                                      0.0, 0.0, 10.0);

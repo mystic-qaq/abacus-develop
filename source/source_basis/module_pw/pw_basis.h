@@ -9,7 +9,11 @@
 #include <complex>
 #include "source_base/module_fft/fft_bundle.h"
 #include "gamma_compact.h"
+#include <atomic>
+#include <cstdint>
 #include <cstring>
+#include <memory>
+#include <mutex>
 #ifdef __MPI
 #include "mpi.h"
 #endif
@@ -57,8 +61,19 @@ class PW_Basis
 {
 
 public:
+    struct CacheStats
+    {
+        std::uint64_t local_pw_hits = 0;
+        std::uint64_t local_pw_misses = 0;
+        std::uint64_t uniqgg_hits = 0;
+        std::uint64_t uniqgg_misses = 0;
+        std::size_t cache_bytes = 0;
+    };
+
     std::string classname;
     PW_Basis();
+    PW_Basis(const PW_Basis& other) = delete;
+    PW_Basis& operator=(const PW_Basis& other) = delete;
     PW_Basis(std::string device_, std::string precision_);
     virtual ~PW_Basis();
     //Init mpi parameters
@@ -138,8 +153,51 @@ public:
     //distribute plane waves and grids and set up fft
     void setuptransform();
 
+    CacheStats get_cache_stats();
+    void reset_cache_stats();
+
 protected:
     int *startnsz_per=nullptr;//useless intermediate variable// startnsz_per[ip]: starting is * nz stick in the ip^th proc.
+
+    void invalidate_cache();
+    void clear_owned_cache();
+
+    std::atomic<bool> local_pw_cache_valid{false};
+    std::atomic<bool> uniqgg_cache_valid{false};
+    std::mutex cache_mutex;
+    std::unique_ptr<double[]> gg_cache_storage;
+    std::unique_ptr<ModuleBase::Vector3<double>[]> gdirect_cache_storage;
+    std::unique_ptr<ModuleBase::Vector3<double>[]> gcar_cache_storage;
+    std::unique_ptr<int[]> ig2igg_cache_storage;
+    std::unique_ptr<double[]> gg_uniq_cache_storage;
+    std::atomic<std::uint64_t> local_pw_cache_hits{0};
+    std::atomic<std::uint64_t> local_pw_cache_misses{0};
+    std::atomic<std::uint64_t> uniqgg_cache_hits{0};
+    std::atomic<std::uint64_t> uniqgg_cache_misses{0};
+
+    struct CacheSignature
+    {
+        double lat0 = 0.0;
+        double tpiba = 0.0;
+        double tpiba2 = 0.0;
+        int nx = 0;
+        int ny = 0;
+        int nz = 0;
+        int fftnx = 0;
+        int fftny = 0;
+        int fftnz = 0;
+        int npw = 0;
+        ModuleBase::Matrix3 G;
+        ModuleBase::Matrix3 GT;
+        ModuleBase::Matrix3 GGT;
+    };
+
+    CacheSignature make_cache_signature() const;
+    bool cache_signature_matches(const CacheSignature& signature) const;
+    void invalidate_cache_unlocked();
+    CacheStats get_cache_stats_unlocked() const;
+    CacheSignature local_pw_cache_signature;
+    CacheSignature uniqgg_cache_signature;
 
     //distribute plane waves to different processors
     void distribute_g();
