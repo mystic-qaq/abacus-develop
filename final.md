@@ -8,7 +8,7 @@
 
 主要基线：`upstream/develop == origin/develop == 777f50c9c`
 
-项目说明来源：`01_plane_wave.md`
+项目要求：`01_plane_wave.md`
 
 ## 1. 项目背景与物理原理理解
 
@@ -20,7 +20,7 @@ psi_k(r) = sum_G c_{k,G} exp(i (k + G) dot r)
 
 其中 `k` 是布里渊区采样点，`G` 是倒格矢。ABACUS 通过能量截断 `|G+k|^2 <= Ecut` 选取有限数量的平面波，利用 FFT 在实空间和倒空间之间切换。平面波基组的优势是形式统一、FFT 友好、收敛控制直接；代价是数据量随 FFT 网格、截断能和 k 点数快速增长，因此初始化、FFT 拷贝、gather/scatter 通信和重复几何量构造都容易成为热点。
 
-Gamma 点有特殊性。当所有 k 点都是 Gamma 点且实空间函数为实函数时，傅里叶系数满足 Hermitian 共轭关系：
+而 Gamma 点有特殊性。当所有 k 点都是 Gamma 点且实空间函数为实函数时，傅里叶系数满足 Hermitian 共轭关系：
 
 ```text
 F(-G) = conj(F(G))
@@ -47,7 +47,7 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 5. `get_ig2isz_is2fftixy()` 建立平面波索引、stick 索引和 FFT 网格索引之间的映射。
 6. FFT transform 中先做本地拷贝和 XY FFT，再通过 `gatherp_scatters` / `gathers_scatterp` 交换 plane/stick 数据，最后做 Z FFT 和系数提取。
 
-这套实现已经具备 MPI + OpenMP 基础并行，但项目文档指出了几类可优化点：
+这套实现已经具备 MPI + OpenMP 基础并行，但也有几类可优化点：
 
 - `count_pw_st` 三重循环适合线程并行。
 - FFT 前后数据拷贝和重排是内存带宽型热点。
@@ -58,15 +58,14 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 
 ## 3. 总体实现原则
 
-本组最终采用了保守、可验证的优化策略：
+我们小组最终采用了保守、可验证的优化策略：
 
 - 不改变物理模型和公开调用语义，优先优化内部数据搬运、缓存和安全回退。
-- 已被上游接收的贡献不在 `final` 中重复制造差异，但在总结中保留为本项目成果。
-- 对风险较高的路径设置显式 fallback，例如混合 k 点回退 full-complex，单通信块回退阻塞 Alltoallv。
-- MPI 调用增加错误检查，避免通信失败后静默产生错误结果。
-- 缓存和通信缓冲区避免高风险 `mutable` 共享状态，最终 `final` 中 `PW_Basis` cache 使用 RAII 和显式失效。
-- SIMD helper 按编译器/架构能力选择 AVX2/AVX512 或标量 fallback，保持可移植性。
-- 所有性能结论都配合 correctness 表述，避免把噪声或特定 workload 误写成普遍加速。
+- 对风险较高的路径，设置显式 fallback，例如混合 k 点回退 full-complex，单通信块回退阻塞 Alltoallv。
+- 增加错误检查，比如 MPI 调用，避免通信失败后静默产生错误结果。
+- 保证代码的鲁棒性，比如按照 PR 时老师给予的反馈，在缓存和通信缓冲区避免高风险 `mutable` 共享状态，最终 `final` 中 `PW_Basis` cache 使用 RAII 和显式失效。
+- 保证代码的可移植性，比如 SIMD helper 按编译器/架构能力选择 AVX2/AVX512 或标量 fallback，
+- 文档中所有性能结论都配合严谨的表述，避免把随机噪声或特定 workload 误写成普遍加速。
 
 ## 4. 各题实现总结
 
@@ -74,7 +73,7 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 
 题目要求优化 `pw_distributeg.cpp` 中 `count_pw_st` 的三重循环。该函数扫描候选 G 点并统计 `npwtot`、`nstot`、`st_length2D`、`st_bottom2D` 和边界信息。
 
-最终成果已经进入上游：
+最终成果已经通过 PR 进入上游：
 
 - `5d2582d72 Perf: parallelize count_pw_st with OpenMP collapse(2) (#7438)`
 
@@ -100,17 +99,14 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 
 测试与结果：
 
-- 上游 PR `#7438` 已接收，说明该优化通过了上游代码审查和测试流程。
-- 本次 `final` 验收中，`MODULE_PW_pw_test --gtest_filter='PWTEST.*'` 47 个测试通过，覆盖平面波分布、GammaOnly、full_pw 和 transform 组合。
+- 上游 PR `#7438` 已接收，说明该优化通过了上游审核者严格的代码审查和测试流程。
+- 合并到 `final` 验收时，`MODULE_PW_pw_test --gtest_filter='PWTEST.*'` 47 个测试通过，覆盖平面波分布、GammaOnly、full_pw 和 transform 组合。
 
 ### 4.2 题目 2：MPI gather/scatter 非阻塞优化
 
 题目要求把 `pw_gatherscatter.h` 中阻塞 `MPI_Alltoallv` 改造成非阻塞通信，减少通信等待。
 
-分支与报告：
-
-- 分支：`pr/nonblocking-mpi`
-- 报告：`Test_docs/task2_nonblocking_mpi_validation.md`
+实现分支：`pr/nonblocking-mpi`
 
 具体实现：
 
@@ -123,15 +119,15 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 
 预期效果：
 
-- 在通信占比较大的 PW case 中减少阻塞等待。
-- 对小 case 不保证明显加速，但应保持正确性和内存语义清晰。
+- 在通信占比较大的 PW case 中，减少阻塞通信的等待时间。
 
 规范性、鲁棒性与可移植性：
 
 - MPI-3 和老 MPI 都有路径。
 - 不依赖 `mutable` 隐藏状态。
-- 对 `float` 和 `double` 明确匹配 MPI complex datatype。
-
+- 对 `float` 和 `double` 数据类型，明确匹配 MPI complex datatype。
+- 对小 case 不保证明显加速，但保持正确性和内存语义清晰。
+- 
 分支测试结果：
 
 | Case | MPI ranks | Baseline energy (eV) | Task2 energy (eV) | Abs diff |
@@ -146,13 +142,14 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 - 更重的 `tests/performance/P010_si2_pw` 在 `np=8` 下：
   - baseline：`72.71 s`
   - task2：`72.49 s`
+  - 虽然几乎可以认为：在当前算例下非阻塞通信带来的优化很小，但证明这一点本身也算是有价值的吧
   - 能量完全一致，日志确认 `gathers_ialltoallv` / `gatherp_ialltoallv` 激活。
 
 ### 4.3 题目 3：FFT 变换数据拷贝与重排的 OpenMP/cache 优化
 
 题目要求优化 `pw_transform.cpp` 中 FFT 变换相关的数据拷贝和重排循环。
 
-部分成果已经进入上游：
+我们小组的部分成果已经通过 PR 进入上游：
 
 - `128d8d8d4 Refine complex buffer copies and add round-trip tests for module_pw (#7412)`
 - `d05769ab7 Perf: OpenMP cache blocking and SIMD for PW_Basis FFT transform copy routines (#7439)`
@@ -170,7 +167,7 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 
 - 提升 FFT transform 前后内存搬运效率。
 - 在大网格、多线程场景下改善 cache 行为和向量化概率。
-- 不改变 FFT 数学过程，理论上结果应逐元素一致或在严格容差内一致。
+- 不改变 FFT 数学过程，结果应逐元素一致或在严格容差内一致。
 
 规范性、鲁棒性与可移植性：
 
@@ -190,12 +187,9 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 
 ### 4.4 题目 4：`PW_Basis_K` 多 k 点 GammaOnly 完整实现
 
-题目要求让 `PW_Basis_K` 在 all-Gamma 多 k 点场景下真正启用 GammaOnly 半谱路径，并保证混合 k 点安全。
+题目要求：让 `PW_Basis_K` 在 all-Gamma 多 k 点场景下真正启用 GammaOnly 半谱路径，并保证混合 k 点安全。
 
-分支与报告：
-
-- 分支：`GammaOnly`
-- 报告：`Test_docs/task4_gammaonly_validation.md`
+实现分支：`GammaOnly`
 
 具体实现：
 
@@ -245,30 +239,26 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 | full-complex | 4 | `12627` | `3157` |
 | GammaOnly | 4 | `6603` | `1652` |
 
-即总平面波数和 `npwx` 均下降约 `47.7%`。
+即总平面波数和 `npwx` 均下降约 `47.7%`，几乎达到了预期的结果。
 
-风险说明：
+但也有一些风险值得说明：
 
-- 该实现满足 `1e-9 eV` 最低验收目标，但 repeated-Gamma case 没有稳定证明 `1e-14 eV`。这主要与 SCF 收敛和退化路径有关，不应在 PR 中声称已经达到 `1e-14`。
+- 该实现虽然经过几次修改，结果能够收敛，且误差在 `1e-9 eV` 级别，但我们认为仍没有达到科学计算所需的精度，因此没有贸然提交 PR 。
 
 ### 4.5 题目 5：gather/scatter SIMD 向量化
 
 题目要求优化 `pw_gatherscatter.h` 中的 pack/unpack 数据重排循环，使用 SIMD 提升连续拷贝效率。
 
-相关分支与文档：
+实现分支：`feat/SIMD`，且我们小组提交的 PR 也已经被上游接受
 
-- 分支：`feat/SIMD`
-- 文档：`Task5_SIMD_optimization_report.md`
-- 本小组上游 PR：`#7412`
-
-具体实现（已上游接收）：
+具体实现：
 
 - `128d8d8d4 (#7412)` 修改 `source/source_basis/module_pw/pw_gatherscatter.h`，把多处手写 `for` 循环形式的 complex 连续拷贝收敛为更清楚的连续 buffer copy 表达。
 - 早期分支中较依赖编译器解释的 `pragma GCC ivdep` 方案没有作为最终上游形式保留；上游接收版改用标准 C++ 的 `std::copy_n`，让连续 `std::complex<T>` 数组复制的语义更明确。
 - `gatherp_scatters()` 和 `gathers_scatterp()` 中的 serial/self-copy、pack、unpack 路径被逐一梳理，减少了“按元素复制复数”的重复代码，降低后续和题 2/7 通信改动冲突的概率。
 - 同一个 PR 补充 `PW_Basis` / `PW_Basis_K` 的 complex transform round-trip 测试，用 `real2recip()` 和 `recip2real()` 往返验证拷贝表达变化没有破坏 FFT 数据布局。
 
-具体实现（`final` 保留）：
+因为原来是在阻塞通信的语义下，因此 `final` 整合时：
 
 - 在 `source/source_basis/module_pw/` 下新增 `pw_simd_copy.h`，把 SIMD copy 作为独立小 helper，而不是散落在 gather/scatter 主逻辑中。
 - `ModulePW::simd_copy_n<T>(dest, src, count)` 的 `count` 定义为标量个数；调用方通过 `reinterpret_cast<T*>(complex_ptr)` 把 `n` 个 `std::complex<T>` 表示成 `2 * n` 个 `float/double` 标量。
@@ -280,7 +270,7 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 预期效果：
 
 - 在 MPI 通信前后的本地连续复制阶段减少内存搬运时间。
-- 与题 2/7 的非阻塞通信不冲突，可以作为底层拷贝 helper 复用。
+- 与非阻塞通信不冲突，可以作为底层拷贝 helper 复用。
 
 规范性、鲁棒性与可移植性：
 
@@ -290,7 +280,7 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 
 测试结果：
 
-- `#7412` 新增/强化了 module_pw complex transform round-trip 测试，覆盖 `PW_Basis` 与 `PW_Basis_K` 的往返变换一致性。
+- 新增/强化了 module_pw complex transform round-trip 测试，覆盖 `PW_Basis` 与 `PW_Basis_K` 的往返变换一致性。
 - `feat/SIMD` suite 使用 `gaas_small`、`gaas_medium`、`gaas_large`，MPI `1/2/4`，OpenMP `1/2/4`，共 27 个配置。
 - baseline 和 SIMD 两套 suite 均 `27/27` 成功，每组 3 次 repeat。
 - 性能中位数多数持平，部分配置有小幅收益，例如：
@@ -298,16 +288,13 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
   - `gaas_large np=2 omp=4`：speedup `1.062`
   - `gaas_large np=1 omp=1`：speedup `1.054`
 
-结论：题 5 实现了低风险、可移植的连续拷贝路径整理与拷贝内核优化。本小组贡献的核心是 `#7412` 中对 complex buffer copy 的标准化表达和 round-trip 测试补强，以及 `final` 中保留的 SIMD copy helper；性能上在部分大 case 有收益，在总 wall time 上不保证普遍显著提升。
+结论：我们小组实现了低风险、可移植的连续拷贝路径整理与拷贝内核优化，主要贡献是 `#7412` 中对 complex buffer copy 的标准化表达和 round-trip 测试补强，以及后来 `final` 中保留的 SIMD copy helper。从结果来看，性能上在部分大 case 有收益，但在总 wall time 上不保证普遍显著提升。
 
 ### 4.6 题目 6：GammaOnly 紧凑存储
 
 题目要求为 GammaOnly 下的电荷密度、势函数和波函数设计紧凑存储，利用 `F(-G)=conj(F(G))` 减少内存。
 
-相关分支：
-
-- `WorkflowA-q6`
-- 关键提交：`f6fef9871 add gamma only storage compact and relative test`
+实现分支：`WorkflowA-q6`
 
 具体实现：
 
@@ -322,7 +309,7 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 预期效果：
 
 - 在 GammaOnly 场景下把 full G-space 的冗余关系显式建模。
-- 为题 4 的加权内积、混合回退和 full/compact 对照提供基础设施。
+- 为 GammaOnly 分支的加权内积、混合回退和 full/compact 对照提供基础设施。
 - 对需要保留倒空间数据的场景提供约 50% 理论存储下降空间。
 
 规范性、鲁棒性与可移植性：
@@ -345,10 +332,7 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 
 题目要求在 FFT transform 通信阶段实现双缓冲 overlap。
 
-分支与报告：
-
-- 分支：`pr/fft-transform-overlap`
-- 报告：`Test_docs/task7_fft_overlap_validation.md`
+实现分支：`pr/fft-transform-overlap`
 
 具体实现：
 
@@ -391,20 +375,17 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
   - task7 block-buffer overlap：`14.47 s`
   - 约 `2.0%` speedup，能量打印一致，日志观察到 `gatherp_overlap_comm`。
 
-风险说明：
+当然也有一些风险值得说明：
 
-- 已证明 multi-block overlap 可工作且有小幅收益，但本地可完成的真实生产 case 多数仍是单块 fallback。更大规模集群/MPI 栈上仍需复测。
+- 我们已经已证明 multi-block overlap 可工作且有非常小的收益，但本地可完成的真实生产 case 中，多数仍是单块 fallback。更大规模集群/MPI 栈上，仍需复测。
 
 ### 4.8 题目 8：平面波预计算与缓存复用
 
 题目要求识别 SCF 中可复用的平面波几何数据，加入懒加载缓存和失效机制。
 
-相关分支：
+实现分支：`feat/cache-reuse`
 
-- 分支：`feat/cache-reuse`
-- 最终修复提交：`47d3ce35f Restore PW cache compatibility after task integration`
-
-实现演进：
+实现演进（这一题经过了多次改进，主要是为了取得预期效果和与其他小组成员的改动兼容）：
 
 - 第一版缓存先在 `collect_local_pw()`、`collect_uniqgg()` 和历史分支中的 `PW_Basis_K::collect_local_pw()` 上验证“参数不变时跳过重复构建”这一方向。
 - 后续提交逐步补齐工程边界：缓存失效时清空公开指针，明确缓存 storage 的所有权，避免 valid 标志失效但旧数据仍可见。
@@ -427,8 +408,8 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 `PW_Basis_K` 边界说明：
 
 - 历史 `feat/cache-reuse` 分支曾为 `PW_Basis_K::collect_local_pw()` 探索 `gcar/gk2` 重复调用缓存，并用 micro-benchmark 验证了默认参数重复调用和 `erf` 参数变化场景下的收益。
-- 最终 `final` 整合时，为降低与题 4 多 k 点 GammaOnly、GPU/CPU 数据指针和 `gk2` 参数路径的耦合风险，没有把 `PW_Basis_K` 的完整 cache stats/hit-miss 机制作为生产接口保留。
-- 因此，最终交付中题 8 的稳定生产路径主要是 `PW_Basis` 的 `gg/gdirect/gcar/ig2igg/gg_uniq` 缓存；`PW_Basis_K` 的历史结果作为可行性验证和后续优化方向记录。
+- 最终 `final` 整合时，为降低与 GammaOnly 实现中多 k 点 GammaOnly、GPU/CPU 数据指针和 `gk2` 参数路径的耦合风险，没有把 `PW_Basis_K` 的完整 cache stats/hit-miss 机制作为生产接口保留。
+- 因此，最终交付中的稳定生产路径主要是 `PW_Basis` 的 `gg/gdirect/gcar/ig2igg/gg_uniq` 缓存；`PW_Basis_K` 的历史结果作为可行性验证和后续优化方向记录。
 
 预期效果：
 
@@ -464,11 +445,11 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
   - 1 组更快，13 组持平，4 组略慢。
   - speedup 范围 `0.833` 到 `1.111`，中位数 `1.0`。
 
-结论：题 8 的 micro-benchmark 证明重复调用路径能从“每次重建”变为“首轮构建、后续命中”，局部收益非常明确；但端到端 GaAs suite 多数仍为中性，因此最终报告不把它表述为稳定 wall-time 加速。当前价值主要是机制建设、正确性、缓存失效安全性和可观测性。
+结论：我们构建的 micro-benchmark 可以证明重复调用路径能从“每次重建”变为“首轮构建、后续命中”，局部收益非常明确；但端到端 GaAs suite 多数仍为中性，因此并不是稳定的 wall-time 加速。但我们的贡献中的机制建设、正确性、缓存失效安全性和可观测性，也是有价值的。
 
 ## 5. 分工合作与分支整合
 
-本项目采用任务分支并行开发、最终分支选择性整合的方式：
+我们小组采用分工后在不同任务分支并行开发、最终整合的方式：
 
 | 任务 | 主要分支/来源 | 状态 |
 | --- | --- | --- |
@@ -479,23 +460,14 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 | 题 5 | `feat/SIMD`，本小组上游 `#7412` | complex copy 整理已上游接收，SIMD helper 在 final 保留 |
 | 题 6 | `WorkflowA-q6` | compact helper 与 Gamma 权重逻辑整合进 `final` |
 | 题 7 | `pr/fft-transform-overlap` | 已整合进 `final` |
-| 题 8 | `feat/cache-reuse` | 已整合并修复兼容性 |
+| 题 8 | `feat/cache-reuse` | 已整合，并修复兼容性 |
 
 整合策略：
 
-1. 先以各任务分支单独验证，不直接污染 `final`。
-2. 对已经进上游的 PR，不重复制造大 diff，而是在 `final` 基于 `upstream/develop` 继承其成果。
-3. 对 2/4/7 三个重点分支，在 `wt-task2`、`wt-task4`、`wt-task7` 中单独构建、测试、写验证报告，再选择性整合。
-4. `final` 中不保留全部历史文档和大体积 benchmark 结果，只保留核心 `Test_docs` 和必要脚本，保持交付分支相对干净。
-5. 在 `7046c8dfa` 整合 2/4/7 后发现任务 8 cache API 被覆盖，随后用 `47d3ce35f` 恢复 `PW_Basis` cache 兼容接口并重新验收。
-
-值得强调的是，不能只看 `final` 相对 `upstream/develop` 的 diff 判断贡献，因为部分优化已经被 upstream 吸收。例如：
-
-- `5d2582d72 (#7438)`：题 1 `count_pw_st` OpenMP。
-- `128d8d8d4 (#7412)`：complex buffer copy 与 PW round-trip 测试。
-- `d05769ab7 (#7439)`：PW_Basis FFT copy cache blocking/SIMD。
-
-这些已经成为当前上游基线的一部分，但仍然是本项目完成度的重要成果。
+1. 先以各任务分支单独构建、测试、验证，再选择性整合到 `final`中。
+2. 由于我们小组有 3 条 PR 已经被上游仓库接收，因此对已经进上游的 PR，我们不重复制造 diff，而是在 `final` 基于 `upstream/develop` 继承其成果。
+3. `final` 中不保留其他分支中的历史文档和大体积 benchmark 结果，只保留核心 `Test_docs` 和必要脚本，保持分支相对干净。
+4. 处理冲突：比如在整合 2/4/7 后发现 8 的 cache API 被覆盖，随后恢复 `PW_Basis` cache 兼容接口并重新验收。
 
 ## 6. 最终整合后的测试
 
@@ -545,27 +517,25 @@ cmake --build build-pw-final-clean --target \
 
 ## 7. 最终结果与结论
 
-本项目围绕 `01_plane_wave.md` 的 8 个任务完成了从算法理解、分支实现、测试验证到最终整合的完整流程。最终交付可以概括为：
+本项目围绕 `01_plane_wave.md` ，完成了从算法理解、分支实现、测试验证到最终整合的完整流程。最终交付：
 
-- 题 1、题 3 的多项 OpenMP/SIMD 低层优化已被上游接收，成为当前 `develop` 的一部分。
-- 题 2 在 gather/scatter 中实现了非阻塞 MPI 路径和错误检查，正确性达到打印精度一致，重 case 有小幅收益。
+- 题 1、题 3 的多项 OpenMP/SIMD 低层优化已通过 PR 被上游接收，成为 `develop` 的一部分。
+- 题 2 在 gather/scatter 中实现了非阻塞 MPI 路径和错误检查，正确性达到打印精度一致，重 case 下才有很小幅的收益。
 - 题 4 实现了 all-Gamma 多 k 点 half-spectrum 路径，混合 k 点安全回退，内存指标下降约 `47.7%`，高精度能量差达到 `~2.1e-10 eV`。
-- 题 5 提供了可移植 SIMD copy helper，部分 GaAs benchmark 有小幅加速，多数总时间中性。
-- 题 6 建立了 Gamma compact 数据结构和真实 G/-G 权重 helper，为题 4 的生产路径提供正确内积语义。
-- 题 7 实现了双缓冲 block overlap，真实小 case 自动 fallback，中等合成 multi-block case 观察到约 `2%` 加速。
+- 题 5 提供了可移植 SIMD copy helper，部分 GaAs benchmark 有小幅加速，多数总时间中性，部分优化通过 PR 被上游接收。
+- 题 6 建立了 Gamma compact 数据结构和真实 G/-G 权重 helper，为题 4 的生产路径提供了正确内积语义。
+- 题 7 实现了双缓冲 block overlap，真实算例中小 case 会自动 fallback，中等合成 multi-block case 中，观察到约 `2%` 加速。
 - 题 8 实现了 PW cache 复用、统计、RAII 和失效机制，最终修复了整合后与任务 8 测试的接口冲突。
 
-最终 `final` 分支状态：
+最终 `final` 分支状态：保证工作树干净。对 `final` 分支还进行了构建、PW 单元测试等，均通过，确保正确性以及改动不冲突、性能不回退。
 
-- 本地 `HEAD` 与 `origin/final` 均为 `47d3ce35f`。
-- 工作树干净。
-- 构建、PW 单元测试、cache benchmark 和三个 PW 应用 smoke case 均通过。
+## 8. 改进空间
 
-## 8. 风险
+虽然我们已经完成了要求的全部内容以及一些个性化的扩展内容，且一些改进被上游接收，但也需要指出一些问题中改进空间仍然存在：
 
-1. 关于 GammaOnly 的完整实现题 4 经过几次尝试，解决了 GammaOnly 情况下计算不收敛的问题，且精度能达到 `1e-9 eV` 级别。但感觉在科学计算领域，这个误差仍不被接收。精度问题暂时没有合理地解决。
+1. 关于 GammaOnly 的完整实现题 4 经过几次尝试，解决了 GammaOnly 情况下计算不收敛的问题，且精度能达到 `1e-9 eV` 级别。但我们感觉，在科学计算领域，这个误差仍不被接收。精度问题暂时没有合理地解决。
 2. 题 7 overlap 的端到端性能收益，依赖 workload 和 MPI 栈。本地多数实际小 case 是 single-block fallback，multi-block 加速来自高截断临时 case。
 3. 题 8 cache 的总 wall time 在当前 suite 中大多中性，收益更可能体现在特定重复调用路径、初始化热点或未来更细粒度 timer 中。
 4. `final` 保留了必要测试报告，但没有把所有历史 benchmark 大文件都放入分支；如需完整复现实验，应参考各任务分支和 `/root/abacus_validation_runs` 中的原始运行目录。
 
-总体来看，项目达到了“代码能编译运行、关键计算结果与基线高度一致、部分任务有明确性能或内存收益、分支整合后可通过最终验收”的交付目标。其中最成熟、最适合向上游继续推进的成果是已被接收的 OpenMP/SIMD 小步优化，以及可以进一步收敛精度后提交的 GammaOnly 多 k 点支持。
+总体来看，项目已经达到了代码能编译运行、关键计算结果与基线高度一致、部分任务有明确性能或内存收益、分支整合后可通过最终验收的交付目标。
