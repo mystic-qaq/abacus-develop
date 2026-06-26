@@ -155,7 +155,6 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 部分成果已经进入上游：
 
 - `128d8d8d4 Refine complex buffer copies and add round-trip tests for module_pw (#7412)`
-- `f4af81009 perf(pw_basis): optimize FFT data reordering with memcpy SIMD vectori... (#7432)`
 - `d05769ab7 Perf: OpenMP cache blocking and SIMD for PW_Basis FFT transform copy routines (#7439)`
 
 最终代码中的实现要点：
@@ -258,10 +257,17 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 相关分支与文档：
 
 - 分支：`feat/SIMD`
-- 文档：`homework_docs/Task5_SIMD_optimization_report.md`
-- 上游相关 PR：`#7412`、`#7432`
+- 文档：`Task5_SIMD_optimization_report.md`
+- 本小组上游 PR：`#7412`
 
-最终实现要点：
+本小组已上游接收的实现要点：
+
+- `128d8d8d4 (#7412)` 对 `source/source_basis/module_pw/pw_gatherscatter.h` 中的 complex buffer copy 做了整理。
+- 将早期较依赖编译器行为的 `pragma GCC ivdep` 路径改为语义更明确的 `std::copy_n`，让连续复数数组拷贝更容易被编译器优化，同时保持 C++ 标准语义。
+- 梳理 `gatherp_scatters` 和 `gathers_scatterp` 中 serial/self-copy、pack、unpack 等路径的连续拷贝表达，减少手写逐元素循环带来的可读性和维护风险。
+- 补充 `PW_Basis` / `PW_Basis_K` 的 complex transform round-trip 测试，验证拷贝路径调整后 `real2recip` 与 `recip2real` 的往返一致性。
+
+`final` 中进一步保留的实现要点：
 
 - 新增 `source/source_basis/module_pw/pw_simd_copy.h`。
 - 提供 `ModulePW::simd_copy_n<T>(dest, src, count)`，把 `std::complex<T>` 的连续存储视为 `2 * n_complex` 个标量复制。
@@ -283,6 +289,7 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 
 测试结果：
 
+- `#7412` 新增/强化了 module_pw complex transform round-trip 测试，覆盖 `PW_Basis` 与 `PW_Basis_K` 的往返变换一致性。
 - `feat/SIMD` suite 使用 `gaas_small`、`gaas_medium`、`gaas_large`，MPI `1/2/4`，OpenMP `1/2/4`，共 27 个配置。
 - baseline 和 SIMD 两套 suite 均 `27/27` 成功，每组 3 次 repeat。
 - 性能中位数多数持平，部分配置有小幅收益，例如：
@@ -290,7 +297,7 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
   - `gaas_large np=2 omp=4`：speedup `1.062`
   - `gaas_large np=1 omp=1`：speedup `1.054`
 
-结论：题 5 更适合描述为“低风险、可移植的拷贝内核优化”，在部分大 case 有收益，在总 wall time 上不保证普遍显著提升。
+结论：题 5 实现了低风险、可移植的连续拷贝路径整理与拷贝内核优化。本小组贡献的核心是 `#7412` 中对 complex buffer copy 的标准化表达和 round-trip 测试补强，以及 `final` 中保留的 SIMD copy helper；性能上在部分大 case 有收益，在总 wall time 上不保证普遍显著提升。
 
 ### 4.6 题目 6：GammaOnly 紧凑存储
 
@@ -391,11 +398,18 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 
 题目要求识别 SCF 中可复用的平面波几何数据，加入懒加载缓存和失效机制。
 
-相关分支与文档：
+相关分支：
 
 - 分支：`feat/cache-reuse`
-- 文档：`Revise_docs/report08_cache_reuse.md`
 - 最终修复提交：`47d3ce35f Restore PW cache compatibility after task integration`
+
+实现演进：
+
+- 第一版缓存先在 `collect_local_pw()`、`collect_uniqgg()` 和历史分支中的 `PW_Basis_K::collect_local_pw()` 上验证“参数不变时跳过重复构建”这一方向。
+- 后续提交逐步补齐工程边界：缓存失效时清空公开指针，明确缓存 storage 的所有权，避免 valid 标志失效但旧数据仍可见。
+- 为避免并发读写状态不一致，缓存构建、命中判断、失效和统计读取统一纳入 mutex 保护，计数器使用 atomic。
+- 为避免晶格、FFT 网格或倒格矢状态变化后静默误命中，引入 cache signature，把 `lat0`、`tpiba/tpiba2`、FFT grid、`npw` 和 `G/GT/GGT` 等决定缓存内容的状态纳入命中条件。
+- 在 2/4/7 任务整合后，`47d3ce35f` 恢复并收敛 `PW_Basis` cache API，保留 `reset_cache_stats()`、`get_cache_stats()` 和 benchmark 所需路径，修复整合中出现的接口兼容问题。
 
 最终实现要点：
 
@@ -413,6 +427,12 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 - 最终修复中恢复了任务 8 测试需要的 `reset_cache_stats()` 和 `get_cache_stats()`，同时避免使用 `mutable`。
 - `MODULE_PW_cache_bench` 中为 benchmark 对象补充 MPI 初始化，修复无效 communicator 问题。
 
+`PW_Basis_K` 边界说明：
+
+- 历史 `feat/cache-reuse` 分支曾为 `PW_Basis_K::collect_local_pw()` 探索 `gcar/gk2` 重复调用缓存，并用 micro-benchmark 验证了默认参数重复调用和 `erf` 参数变化场景下的收益。
+- 最终 `final` 整合时，为降低与题 4 多 k 点 GammaOnly、GPU/CPU 数据指针和 `gk2` 参数路径的耦合风险，没有把 `PW_Basis_K` 的完整 cache stats/hit-miss 机制作为生产接口保留。
+- 因此，最终交付中题 8 的稳定生产路径主要是 `PW_Basis` 的 `gg/gdirect/gcar/ig2igg/gg_uniq` 缓存；`PW_Basis_K` 的历史结果作为可行性验证和后续优化方向记录。
+
 预期效果：
 
 - 减少 SCF 中重复构造 G 相关数组、去重 `|G|^2` 和排序映射的开销。
@@ -427,15 +447,27 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 
 测试结果：
 
+- `test/test1-1-1.cpp` 验证 `PW_Basis` cache stats 的 build/hit/invalidate 行为：
+  - 首次构建后 miss 增加。
+  - 重复调用后 hit 增加且 `cache_bytes > 0`。
+  - 失效后 `cache_bytes` 回到 0，避免旧缓存被误报告为有效。
+- `MODULE_PW_basis_pw_serial` 和 `PWTEST.*` 继续覆盖 `PW_Basis` 基础构建、分布和 transform 组合，验证缓存接口未破坏原有平面波路径。
+- `MODULE_PW_cache_bench_serial` / `MODULE_PW_cache_bench` 保留为串行和 MPI 环境下的 cache 可观测性工具。
 - `MODULE_PW_cache_bench` 当前运行结果显示：
   - `collect_local_pw_cache_hit.calls = 2000`
   - `collect_uniqgg_cache_hit.calls = 2000`
   - build 与 MPI 运行均通过。
+- 历史 micro-benchmark 中，重复调用路径显示数量级收益：
+  - `PW_Basis.collect_local_pw.repeat` 中位数约 `255.5x`。
+  - `PW_Basis.collect_uniqgg.repeat` 中位数约 `2284.4x`。
+  - `PW_Basis_K.collect_local_pw.repeat` 历史分支中位数约 `342.7x`。
+  - `PW_Basis_K.collect_local_pw(1.0, 0.5, 0.2)` 历史分支中位数约 `463.0x`，说明 `erf` 参数变化时仍可复用部分几何量。
+  - 值得说明的是，这里的测试是单独针对 `collect` 函数的重复调用获得的收益，针对端到端的SCF里可能收益不会如此明显。
 - 历史 task8 suite 使用 `gaas_small`、`gaas_medium`，MPI `1/2/4`，OpenMP `1/2/4`，共 18 组 baseline/cache 对比。
   - 1 组更快，13 组持平，4 组略慢。
   - speedup 范围 `0.833` 到 `1.111`，中位数 `1.0`。
 
-结论：题 8 当前价值主要是机制建设、正确性和可观测性；wall time 尚未证明稳定大幅提升。
+结论：题 8 的 micro-benchmark 证明重复调用路径能从“每次重建”变为“首轮构建、后续命中”，局部收益非常明确；但端到端 GaAs suite 多数仍为中性，因此最终报告不把它表述为稳定 wall-time 加速。当前价值主要是机制建设、正确性、缓存失效安全性和可观测性。
 
 ## 5. 分工合作与分支整合
 
@@ -445,9 +477,9 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 | --- | --- | --- |
 | 题 1 | `origin/feat/openmp-collapse-for-loop`，上游 `#7438` | 已上游接收 |
 | 题 2 | `pr/nonblocking-mpi` | 已整合进 `final` |
-| 题 3 | `WorkflowA` / `feat/fft-copy-block-simd`，上游 `#7412/#7432/#7439` | 多项已上游接收，剩余与 final 协同 |
+| 题 3 | `WorkflowA` / `feat/fft-copy-block-simd`，上游 `#7412/#7439` | 多项已上游接收，剩余与 final 协同 |
 | 题 4 | `GammaOnly` | 已整合进 `final` |
-| 题 5 | `feat/SIMD`，上游 `#7412/#7432` | 部分已上游接收，SIMD helper 在 final 保留 |
+| 题 5 | `feat/SIMD`，本小组上游 `#7412` | complex copy 整理已上游接收，SIMD helper 在 final 保留 |
 | 题 6 | `WorkflowA-q6` | compact helper 与 Gamma 权重逻辑整合进 `final` |
 | 题 7 | `pr/fft-transform-overlap` | 已整合进 `final` |
 | 题 8 | `feat/cache-reuse` | 已整合并修复兼容性 |
@@ -464,7 +496,6 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 
 - `5d2582d72 (#7438)`：题 1 `count_pw_st` OpenMP。
 - `128d8d8d4 (#7412)`：complex buffer copy 与 PW round-trip 测试。
-- `f4af81009 (#7432)`：FFT 数据重排 memcpy/SIMD 优化。
 - `d05769ab7 (#7439)`：PW_Basis FFT copy cache blocking/SIMD。
 
 这些已经成为当前上游基线的一部分，但仍然是本项目完成度的重要成果。
