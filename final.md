@@ -78,13 +78,13 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 
 - `5d2582d72 Perf: parallelize count_pw_st with OpenMP collapse(2) (#7438)`
 
-实现要点：
+具体实现：
 
-- 对外层 stick 扫描引入 OpenMP 并行，当前基线代码中保留了 `#pragma omp parallel for collapse(1)` 和 reduction。
-- `npwtot_local`、`nstot_local` 使用加法归约，`rix/riy/lix/liy` 使用 min/max 归约。
-- 每个 `(ix, iy)` 对应唯一 `st_length2D[index]` 和 `st_bottom2D[index]`，因此数组写入不存在跨线程冲突。
-- `iz` 方向保持串行扫描，保证 `st_bottom2D` 仍记录该 stick 上第一个满足截断条件的 `iz`。
-- 相关分支文档分析了 `collapse(2)` 和 `collapse(1)` 的取舍：更激进的二维 collapse 有更大并行粒度，但最终上游版本采用了更稳妥的形式。
+- 在 `source/source_basis/module_pw/pw_distributeg.cpp` 的 `PW_Basis::count_pw_st()` 中，把原先串行更新成员变量的统计过程拆成局部变量：`npwtot_local`、`nstot_local`、`lix_local/rix_local`、`liy_local/riy_local`。
+- 对 `ix` 外层循环增加 `#pragma omp parallel for collapse(1)`，并为平面波总数、stick 总数和边界变量分别声明加法、min、max reduction。
+- 保留 `iy` 和 `iz` 的原有扫描顺序；每个线程只写自己负责的 `(ix, iy)` 对应的 `st_length2D[index]` 和 `st_bottom2D[index]`，因此没有对同一数组元素的并发写冲突。
+- `iz` 循环中的 `length` 仍然是局部变量，第一次满足截断条件时写入 `st_bottom2D[index]`，确保 stick 底部坐标语义不变。
+- 循环结束后再把局部归约结果写回 `this->npwtot`、`this->nstot`、`this->lix/rix/liy/riy`，没有改变 `count_pw_st()` 的函数接口和后续 `distribution_method1/2()` 的调用方式。
 
 预期效果：
 
@@ -112,14 +112,14 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 - 分支：`pr/nonblocking-mpi`
 - 报告：`Test_docs/task2_nonblocking_mpi_validation.md`
 
-实现要点：
+具体实现：
 
-- `gatherp_scatters` 和 `gathers_scatterp` 保持原有调用接口与输入输出语义。
-- MPI-3 环境优先使用 `MPI_Ialltoallv`。
-- 老 MPI 环境保留 `MPI_Irecv` / `MPI_Isend` fallback。
-- 使用 `detail::mpi_complex_dtype<T>()` 做编译期类型分发，避免运行期 `typeid` 分支。
-- 所有 MPI 调用通过 `detail::check_mpi()` 检查返回码，失败时给出可定位错误信息。
-- 去掉早期隐藏 work-buffer 方案，保留调用者 buffer 数据流，避免额外大块持久通信空间。
+- 在 `source/source_basis/module_pw/pw_gatherscatter.h` 的 `detail` namespace 中增加 `mpi_complex_dtype<T>()`，对 `double` 返回 `MPI_DOUBLE_COMPLEX`，对 `float` 返回 `MPI_COMPLEX`，使 `gatherp_scatters<T>()` 和 `gathers_scatterp<T>()` 不再依赖运行期类型判断。
+- 同一文件中增加 `detail::check_mpi(ierr, where)`，把 `MPI_Ialltoallv`、`MPI_Irecv`、`MPI_Isend`、`MPI_Wait/Waitall` 等调用统一包起来；一旦返回码不是 `MPI_SUCCESS`，错误信息会带上调用位置，便于定位通信失败。
+- 在任务 2 分支的 `PW_Basis::gatherp_scatters()` 中，原先的 `MPI_Alltoallv(out, ..., in, ...)` 通信路径被改为非阻塞启动：MPI-3 编译环境走 `MPI_Ialltoallv`，随后显式 `MPI_Wait`；不支持 MPI-3 时按 rank 循环提交 `MPI_Irecv` 和 `MPI_Isend`，再 `MPI_Waitall`。
+- `PW_Basis::gathers_scatterp()` 采用对称修改：先保持原来的 pack/unpack 布局语义，再把跨 rank 的 all-to-all 数据交换改为同一套非阻塞 helper；整合到 `final` 后，多块通信路径继续复用这套非阻塞 helper，单块小 case 的阻塞 fallback 在题 7 中单独说明。
+- 通信临时数据使用函数内局部 `std::vector<std::complex<T>>` 或调用者传入的 `in/out` buffer，不再依赖隐藏的持久 work-buffer，也没有使用 `mutable` 缓存绕过 const 语义。
+- 串行或单 rank 路径仍然直接做本地 copy，MPI 路径只改变通信启动/等待方式，不改变 `numr/startg/numg/startr` 等计数和位移数组的含义。
 
 预期效果：
 
@@ -157,13 +157,14 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 - `128d8d8d4 Refine complex buffer copies and add round-trip tests for module_pw (#7412)`
 - `d05769ab7 Perf: OpenMP cache blocking and SIMD for PW_Basis FFT transform copy routines (#7439)`
 
-最终代码中的实现要点：
+具体实现：
 
-- `pw_transform.cpp` 中引入 `pw_transform_cache_block = 128` 和 `block_end()`。
-- 连续拷贝循环按块处理，并配合 `#pragma omp parallel for schedule(static)` 与 `#pragma omp simd`。
-- 对 `nrxx`、`npw`、`nxyz`、`ig2isz` 等成员提前缓存到局部变量，降低循环内成员访问和别名分析压力。
-- 覆盖 complex-to-complex 路径和 GammaOnly real-to-complex / complex-to-real 路径。
-- 新增 `test_transform_omp.cpp`，验证多线程 transform 的 round-trip 一致性。
+- 在 `source/source_basis/module_pw/pw_transform.cpp` 的匿名 namespace 中增加 `constexpr int pw_transform_cache_block = 128` 和 `block_end(begin, size)`，所有被优化的拷贝循环都按固定块处理尾部。
+- `real2recip()` 和 `recip2real()` 中原先直接遍历 `nrxx`、`npw`、`nstnz` 的循环，被改为外层 `for (ib += pw_transform_cache_block)` 分块、内层 `#pragma omp parallel for schedule(static)` 或 `#pragma omp simd` 的结构。
+- 循环开始前把 `this->nrxx`、`this->npw`、`this->nxyz`、`this->ig2isz`、`this->ig2ixyz_gpu` 等成员读到局部 const 变量，减少循环内重复成员访问，并帮助编译器做别名和向量化分析。
+- full-complex 路径仍调用原来的 `fftxyfor/fftxybac`；GammaOnly 实数路径则把 real input 拷入 `rspace` 后调用 `fftxyr2c`，逆变换调用 `fftxyc2r` 后再写回 real 或虚部为 0 的 complex output。
+- 对 add 模式保留原有 `factor` 累加语义：非 add 时覆盖输出，add 时在目标数组上累加缩放后的 transform 结果。
+- 在 `source/source_basis/module_pw/test/test_transform_omp.cpp` 中新增多线程 round-trip 测试，分别覆盖 full-complex 和 GammaOnly real transform，防止分块和 OpenMP 改写引入索引错误。
 
 预期效果：
 
@@ -196,15 +197,15 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 - 分支：`GammaOnly`
 - 报告：`Test_docs/task4_gammaonly_validation.md`
 
-实现要点：
+具体实现：
 
-- `PW_Basis_K::initparameters()` 使用 `gamma_k_tolerance = 1e-12` 判断每个 k 点是否为 Gamma。
-- 只有当 `gamma_only_in == true` 且所有 k 点都是 Gamma 时，`PW_Basis_K::gamma_only` 才保持 true。
-- 任意非 Gamma k 点都会安全回退 full-complex，避免半谱错误应用到混合 k 点。
-- `setuptransform()` 中初始化 `GammaCompact`，基于真实 `G` 与 `-G` 关系构造自共轭标记和权重。
-- `setupIndGk()` 记录每个 `igl` 的 Gamma compact inner-product weight。
-- `PW_Basis_K::real2recip/recip2real` 支持 real GammaOnly 路径；complex real-space input 若有非零虚部则显式拒绝。
-- `ElecStatePW::cal_becsum`、`Charge_Mixing`、`DiagoCG`、`DiagoIterAssist`、`HSolverPW` 等路径补充 Gamma compact 权重，避免简单 `*2.0` 造成 `G=0` 或自共轭点过计数。
+- 在 `source/source_basis/module_pw/pw_basis_k.cpp` 中增加 `gamma_k_tolerance = 1.0e-12`，`PW_Basis_K::initparameters()` 先计算每个 `kvec_c[ik]` 的模长，填充新增成员 `is_gamma_k[ik]`。
+- `PW_Basis_K::gamma_only` 的赋值改为 `gamma_only_in && all_gamma_k`；只要任意 k 点不是 Gamma，就保持 full-complex FFT 尺寸，避免混合 k 点误走半谱。
+- 同一函数中把 `cutoff_kmaxmod` 改成 `all_gamma_k ? 0.0 : kmaxmod`，all-Gamma 时不再因为重复 Gamma k 点扩大 G 截断球；随后按 `gamma_only` 调整 `fftnx/fftny` 为 half-spectrum 尺寸。
+- 在 `source/source_basis/module_pw/pw_basis_k.h` 中增加 `bool* is_gamma_k`、`std::vector<double> igl2gamma_weight_k` 和 `get_gamma_weight(ik, igl)`，把“这个 k 点是否 Gamma”和“这个 compact G 的内积权重”作为显式状态保存。
+- `PW_Basis_K::setuptransform()` 在 `gamma_only == true` 时初始化基类的 `gamma_compact`；`setupIndGk()` 建立 `igl2ig_k` 后，用 `gamma_compact.conjugate_weight(ig)` 填充 `igl2gamma_weight_k`。
+- `source/source_basis/module_pw/pw_transform_k.cpp` 中补齐 `PW_Basis_K::real2recip/recip2real` 的 GammaOnly real transform 路径；complex real-space input 若虚部超过容差则直接报错，避免静默丢弃虚部。
+- 在电子态、电荷混合和对角化相关代码中，把原先粗略的 Gamma `2.0` 因子替换为 `get_gamma_weight()`：普通 G/-G 对权重为 2，自共轭点权重为 1，避免 `G=0` 或 Nyquist 边界过计数。
 
 预期效果：
 
@@ -260,21 +261,21 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 - 文档：`Task5_SIMD_optimization_report.md`
 - 本小组上游 PR：`#7412`
 
-本小组已上游接收的实现要点：
+具体实现（已上游接收）：
 
-- `128d8d8d4 (#7412)` 对 `source/source_basis/module_pw/pw_gatherscatter.h` 中的 complex buffer copy 做了整理。
-- 将早期较依赖编译器行为的 `pragma GCC ivdep` 路径改为语义更明确的 `std::copy_n`，让连续复数数组拷贝更容易被编译器优化，同时保持 C++ 标准语义。
-- 梳理 `gatherp_scatters` 和 `gathers_scatterp` 中 serial/self-copy、pack、unpack 等路径的连续拷贝表达，减少手写逐元素循环带来的可读性和维护风险。
-- 补充 `PW_Basis` / `PW_Basis_K` 的 complex transform round-trip 测试，验证拷贝路径调整后 `real2recip` 与 `recip2real` 的往返一致性。
+- `128d8d8d4 (#7412)` 修改 `source/source_basis/module_pw/pw_gatherscatter.h`，把多处手写 `for` 循环形式的 complex 连续拷贝收敛为更清楚的连续 buffer copy 表达。
+- 早期分支中较依赖编译器解释的 `pragma GCC ivdep` 方案没有作为最终上游形式保留；上游接收版改用标准 C++ 的 `std::copy_n`，让连续 `std::complex<T>` 数组复制的语义更明确。
+- `gatherp_scatters()` 和 `gathers_scatterp()` 中的 serial/self-copy、pack、unpack 路径被逐一梳理，减少了“按元素复制复数”的重复代码，降低后续和题 2/7 通信改动冲突的概率。
+- 同一个 PR 补充 `PW_Basis` / `PW_Basis_K` 的 complex transform round-trip 测试，用 `real2recip()` 和 `recip2real()` 往返验证拷贝表达变化没有破坏 FFT 数据布局。
 
-`final` 中进一步保留的实现要点：
+具体实现（`final` 保留）：
 
-- 新增 `source/source_basis/module_pw/pw_simd_copy.h`。
-- 提供 `ModulePW::simd_copy_n<T>(dest, src, count)`，把 `std::complex<T>` 的连续存储视为 `2 * n_complex` 个标量复制。
-- AVX512、AVX2、标量三类实现按编译宏选择。
-- AVX512 默认可通过宏禁用，避免部分 CPU 512-bit 指令降频导致负收益。
-- 使用 unaligned load/store，避免假设 `std::vector` 或外部 buffer cache-line 对齐。
-- `gatherp_scatters` 和 `gathers_scatterp` 的 serial/self-copy/pack/unpack 路径调用 `simd_copy_n`。
+- 在 `source/source_basis/module_pw/` 下新增 `pw_simd_copy.h`，把 SIMD copy 作为独立小 helper，而不是散落在 gather/scatter 主逻辑中。
+- `ModulePW::simd_copy_n<T>(dest, src, count)` 的 `count` 定义为标量个数；调用方通过 `reinterpret_cast<T*>(complex_ptr)` 把 `n` 个 `std::complex<T>` 表示成 `2 * n` 个 `float/double` 标量。
+- `pw_simd_copy.h` 中分别实现 `simd_detail::copy_n_impl(float*)` 和 `copy_n_impl(double*)`；编译器支持 AVX512 时使用 `_mm512_loadu/storeu`，支持 AVX2 时使用 `_mm256_loadu/storeu`，否则落到普通标量循环。
+- AVX512 路径由 `SIMD_COPY_DISABLE_AVX512` 宏控制，避免在容易降频的 CPU 上强制使用 512-bit 指令；所有 SIMD load/store 都使用 unaligned 版本，不假设 `std::vector` 或外部 buffer 对齐。
+- `simd_copy_n()` 内部用 `static_assert` 限制 `T` 只能是 `float` 或 `double`，避免把非浮点类型误传给 SIMD helper。
+- `pw_gatherscatter.h` 中的 serial/self-copy/pack/unpack 连续复制点调用 `ModulePW::simd_copy_n()`，其余 MPI 计数、位移和数据布局保持不变。
 
 预期效果：
 
@@ -308,16 +309,15 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 - `WorkflowA-q6`
 - 关键提交：`f6fef9871 add gamma only storage compact and relative test`
 
-最终实现要点：
+具体实现：
 
-- 新增 `CompactGammaData<T>`，用于独立表示 logical full G-space 与 compact representative 之间的关系。
-- 支持显式 `minus_g_index` 映射，也支持单元测试使用的 half-by-index 默认映射。
-- 提供 `compress_from()`、`decompress_to()`、`memory_saving_ratio()` 等接口。
-- 新增 `GammaCompact`，面向 `PW_Basis` 的真实半谱布局：
-  - 识别自共轭 G 点。
-  - 记录 `conjugate_weight`，普通 G 权重为 2，自共轭 G 权重为 1。
-  - 支持 compact/full 之间 expand/pack，用于验证或需要 full spectrum 的路径。
-- `final` 中没有把所有分支原型接口都暴露为生产路径，而是把 `GammaCompact` 权重和 half-spectrum helper 与题 4 的多 k GammaOnly 生产路径结合。
+- 在 `source/source_basis/module_pw/compact_gamma_data.h` 中新增模板类 `CompactGammaData<FPTYPE>`，内部用 `data_` 保存 compact representative，用 `rep_index_`、`need_conj_`、`self_conj_` 描述 logical full G-space 到 compact 存储的映射。
+- `CompactGammaData::reset(logical_size)` 提供单元测试可用的 half-by-index 默认映射；`reset(logical_size, minus_g_index)` 接受显式 `G -> -G` index 映射，非法 index 会抛出 `std::out_of_range`。
+- `compress_from()` 从 dense reciprocal 数组压缩到 compact 存储；自共轭项只保留实部。`decompress_to()` 按 `need_conj_` 决定直接复制或取共轭，恢复 logical full view。
+- `memory_saving_ratio()`、`dense_bytes()`、`compact_bytes()` 提供可观测的存储收益指标，便于测试和报告直接输出内存下降比例。
+- 在 `source/source_basis/module_pw/gamma_compact.h/.cpp` 中新增 `GammaCompact`，面向真实 `PW_Basis` half-spectrum 布局构造 `self_conj_`、`conjugate_weight_`、`compact_conj_`、`c2f_`、`f2c_` 和 `conj_of_`。
+- `GammaCompact::initialize(const PW_Basis*)` 在 `distribute_g()` 和 `ig2isz/is2fftixy` 建好后调用，基于真实 FFT grid 中的 G 和 `-G` 关系识别自共轭点，而不是按数组下标硬配对。
+- `expand_to_full()` 和 `pack_from_full()` 用于 compact/full spectrum 对照验证；生产路径中主要复用 `conjugate_weight()`，并与题 4 的 `PW_Basis_K` 多 k GammaOnly 权重逻辑结合。
 
 预期效果：
 
@@ -350,14 +350,15 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 - 分支：`pr/fft-transform-overlap`
 - 报告：`Test_docs/task7_fft_overlap_validation.md`
 
-实现要点：
+具体实现：
 
-- `gatherp_scatters` 和 `gathers_scatterp` 在多块场景下按 block 切分 sticks。
-- 为两个 block 准备双缓冲：当前 block 非阻塞通信时准备下一 block，本 block 通信完成后立即 unpack。
-- MPI-3 使用 block-level `MPI_Ialltoallv`；老 MPI 保留 `MPI_Irecv` / `MPI_Isend` fallback。
-- `overlap_block_sticks()` 根据 `nst` 和 block span 选择 block 大小，避免固定大缓冲。
-- 单通信块 case 没有可 overlap 的“下一块”，因此显式走 `gatherp_single_block_fallback` / `gathers_single_block_fallback`。
-- 延迟分配双缓冲，避免单块 fallback 也分配大工作区。
+- 在 `source/source_basis/module_pw/pw_gatherscatter.h` 的 `detail` namespace 中增加 `overlap_block_sticks(nst, span)`，根据 stick 数和每个 stick 对应的数据跨度估计 block 大小，避免对所有 case 固定分配大通信缓冲。
+- `PW_Basis::gatherp_scatters()` 先计算 `block_sticks`、`nst_max` 和 `num_blocks`；当 `num_blocks == 1` 时直接进入 `gatherp_single_block_fallback`，继续使用原来的 pack、阻塞 `MPI_Alltoallv`、unpack 流程。
+- 多 block 时在函数内部创建一个 `std::vector<std::complex<T>> commbuf`，切成两个 send buffer 和两个 recv buffer；`BlockState blocks[2]` 保存每个 block 的 `sendcounts/recvcounts/sdispls/rdispls` 和 MPI request。
+- `prepare_block()` 负责当前 block 的 pack 和本 rank 自拷贝，然后启动非阻塞通信：MPI-3 走 `MPI_Ialltoallv`，老 MPI 走逐 rank 的 `MPI_Irecv` / `MPI_Isend`。
+- 主循环采用双缓冲：先 `prepare_block(current)`，下一轮如果还有 block 就 `prepare_block(next)`，随后 `finalize_block(current)` 等待当前通信完成并 unpack；这样下一 block 的本地 pack 可以和当前 block 的通信等待发生重叠。
+- `PW_Basis::gathers_scatterp()` 按同样结构实现反向 gather/scatter；timer 名称分别记录 `gatherp_overlap_comm`、`gathers_overlap_comm` 和单块 fallback，方便从日志确认实际路径。
+- 双缓冲只在 `num_blocks > 1` 时分配，单块小算例不会为 overlap 额外分配通信工作区。
 
 预期效果：
 
@@ -411,21 +412,17 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 - 为避免晶格、FFT 网格或倒格矢状态变化后静默误命中，引入 cache signature，把 `lat0`、`tpiba/tpiba2`、FFT grid、`npw` 和 `G/GT/GGT` 等决定缓存内容的状态纳入命中条件。
 - 在 2/4/7 任务整合后，`47d3ce35f` 恢复并收敛 `PW_Basis` cache API，保留 `reset_cache_stats()`、`get_cache_stats()` 和 benchmark 所需路径，修复整合中出现的接口兼容问题。
 
-最终实现要点：
+具体实现：
 
-- `PW_Basis` 新增 `CacheStats`，包括：
-  - `local_pw_hits`
-  - `local_pw_misses`
-  - `uniqgg_hits`
-  - `uniqgg_misses`
-  - `cache_bytes`
-- `collect_local_pw()` 缓存 `gg`、`gdirect`、`gcar`。
-- `collect_uniqgg()` 缓存 `ig2igg`、`gg_uniq`，并优先复用已经存在的 `gg`。
-- 缓存存储使用 `std::unique_ptr<T[]>`，析构时通过 `clear_owned_cache()` 统一释放。
-- `invalidate_cache()` 在 `initmpi()`、`initgrids()`、`initparameters()`、`setfullpw()` 和 `get_ig2isz_is2fftixy()` 等状态变化点调用。
-- cache signature 包含 lattice、FFT grid、`npw` 和 `G/GT/GGT`，避免状态改变后误命中。
-- 最终修复中恢复了任务 8 测试需要的 `reset_cache_stats()` 和 `get_cache_stats()`，同时避免使用 `mutable`。
-- `MODULE_PW_cache_bench` 中为 benchmark 对象补充 MPI 初始化，修复无效 communicator 问题。
+- 在 `source/source_basis/module_pw/pw_basis.h` 中新增 `PW_Basis::CacheStats`，包含 `local_pw_hits`、`local_pw_misses`、`uniqgg_hits`、`uniqgg_misses` 和 `cache_bytes`；对外提供 `get_cache_stats()` 与 `reset_cache_stats()`。
+- 同一头文件中删除 `PW_Basis` 的拷贝构造和拷贝赋值，避免带缓存所有权的对象被浅拷贝；缓存存储改为 `std::unique_ptr<double[]>`、`std::unique_ptr<Vector3<double>[]>`、`std::unique_ptr<int[]>`。
+- `PW_Basis` 增加 `local_pw_cache_valid`、`uniqgg_cache_valid`、`cache_mutex` 和 atomic hit/miss 计数器；构建、命中判断、失效和统计读取都通过 mutex/atomic 管理，没有使用 `mutable` 绕过 const。
+- 在 `pw_basis.cpp` 中实现 `clear_owned_cache()`、`invalidate_cache()`、`invalidate_cache_unlocked()`、`make_cache_signature()`、`cache_signature_matches()` 和 `get_cache_stats_unlocked()`，把缓存释放、失效和状态签名比较集中到一处。
+- `collect_local_pw()` 首次调用时仍按原算法构造 `gg`、`gdirect`、`gcar`，但结果写入 unique_ptr 管理的 storage，并把公开指针指向 storage；后续 signature 匹配时直接命中缓存并增加 `local_pw_hits`。
+- `collect_uniqgg()` 缓存 `ig2igg` 和 `gg_uniq`，同时优先复用已经存在的 `gg`，避免为去重 `|G|^2` 再重复计算本地 G 模长。
+- `CacheSignature` 记录 `lat0`、`tpiba/tpiba2`、`nx/ny/nz`、`fftnx/fftny/fftnz`、`npw` 和 `G/GT/GGT`；当晶格、FFT 网格、截断或分布改变时不会误命中旧缓存。
+- 在 `pw_init.cpp`、`pw_distributeg.cpp` 等会改变平面波几何状态的入口调用 `invalidate_cache()`，例如 `initmpi()`、`initgrids()`、`initparameters()`、`setfullpw()`、`get_ig2isz_is2fftixy()`。
+- `source/source_basis/module_pw/test_serial/pw_cache_bench.cpp` 为 MPI benchmark 对象补充 `initmpi()` 初始化，修复整合后无效 communicator 导致的编译/运行问题；`47d3ce35f` 同时恢复任务 8 测试依赖的 cache stats API。
 
 `PW_Basis_K` 边界说明：
 
@@ -564,11 +561,11 @@ cmake --build build-pw-final-clean --target \
 - 工作树干净。
 - 构建、PW 单元测试、cache benchmark 和三个 PW 应用 smoke case 均通过。
 
-## 8. 仍需注意的风险
+## 8. 风险
 
-1. GammaOnly 题 4 当前通过 `1e-9 eV` 验收，但没有稳定证明 repeated-Gamma case 达到 `1e-14 eV`。若要向上游发 PR，应继续寻找更稳健的收敛设置或更合适的高精度验证 case。
-2. 题 7 overlap 的端到端性能收益依赖 workload 和 MPI 栈。本地多数实际小 case 是 single-block fallback，multi-block 加速来自高截断临时 case。
+1. 关于 GammaOnly 的完整实现题 4 经过几次尝试，解决了 GammaOnly 情况下计算不收敛的问题，且精度能达到 `1e-9 eV` 级别。但感觉在科学计算领域，这个误差仍不被接收。精度问题暂时没有合理地解决。
+2. 题 7 overlap 的端到端性能收益，依赖 workload 和 MPI 栈。本地多数实际小 case 是 single-block fallback，multi-block 加速来自高截断临时 case。
 3. 题 8 cache 的总 wall time 在当前 suite 中大多中性，收益更可能体现在特定重复调用路径、初始化热点或未来更细粒度 timer 中。
-4. `final` 保留了必要测试报告，但没有把所有历史 benchmark 大文件都放入交付分支；如需完整复现实验，应参考各任务分支和 `/root/abacus_validation_runs` 中的原始运行目录。
+4. `final` 保留了必要测试报告，但没有把所有历史 benchmark 大文件都放入分支；如需完整复现实验，应参考各任务分支和 `/root/abacus_validation_runs` 中的原始运行目录。
 
 总体来看，项目达到了“代码能编译运行、关键计算结果与基线高度一致、部分任务有明确性能或内存收益、分支整合后可通过最终验收”的交付目标。其中最成熟、最适合向上游继续推进的成果是已被接收的 OpenMP/SIMD 小步优化，以及可以进一步收敛精度后提交的 GammaOnly 多 k 点支持。
