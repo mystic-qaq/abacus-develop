@@ -127,7 +127,7 @@ ABACUS 的平面波模块主要集中在 `source/source_basis/module_pw/`：
 - 不依赖 `mutable` 隐藏状态。
 - 对 `float` 和 `double` 数据类型，明确匹配 MPI complex datatype。
 - 对小 case 不保证明显加速，但保持正确性和内存语义清晰。
-- 
+
 分支测试结果：
 
 | Case | MPI ranks | Baseline energy (eV) | Task2 energy (eV) | Abs diff |
